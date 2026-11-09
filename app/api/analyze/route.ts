@@ -37,6 +37,10 @@ function normalize(raw: any, sourceText: string, known: Character[]): Analysis {
       emotion: (EMOTIONS as readonly string[]).includes(s.emotion) ? (s.emotion as Emotion) : "neutral",
       delivery: typeof s.delivery === "string" ? s.delivery.slice(0, 120) : "",
       sfx: typeof s.sfx === "string" ? s.sfx.slice(0, 80) : "",
+      tags: Array.isArray(s.tags)
+        ? s.tags.filter((t: unknown) => typeof t === "string" && t.trim()).map((t: string) => t.slice(0, 30)).slice(0, 3)
+        : [],
+      intensity: [1, 2, 3].includes(Number(s.intensity)) ? Number(s.intensity) : 1,
     }));
 
   // Safety net: if the model dropped too much text, fall back to the plain split

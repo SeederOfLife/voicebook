@@ -206,9 +206,12 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 /* ---------- panels ---------- */
 .chip.on { border-color: var(--accent); }
 .cast-row { grid-template-columns: 12px 1fr; }
-.cast-selects { grid-column: 2; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cast-selects { grid-column: 2; display: grid; grid-template-columns: 40px 1fr 1fr; gap: 8px; }
+.preview-btn { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; color: var(--accent); min-height: 34px; }
+.preview-btn:hover { border-color: var(--accent); }
+.tip { margin: 0; padding: 12px; border-radius: 12px; background: #f0a35e14; border: 1px solid #f0a35e40; line-height: 1.6; }
 @media (min-width: 640px) {
-  .cast-row { grid-template-columns: 12px 1fr minmax(260px, 55%); }
+  .cast-row { grid-template-columns: 12px 1fr minmax(300px, 60%); }
   .cast-selects { grid-column: auto; }
 }
 .sound { margin-top: 14px; display: grid; gap: 14px; }

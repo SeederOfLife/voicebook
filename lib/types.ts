@@ -67,6 +67,10 @@ export interface RawSegment {
   emotion: Emotion;
   delivery?: string;
   sfx?: string;
+  /** Performance tags such as "whispers", "nervous laugh", "sighs" (used by expressive engines) */
+  tags?: string[];
+  /** 1 = subtle, 2 = clear, 3 = intense */
+  intensity?: number;
 }
 
 export interface Segment extends RawSegment {
@@ -113,6 +117,10 @@ export interface TTSRequest {
   emotion: Emotion;
   delivery?: string;
   speaker: string;
+  tags?: string[];
+  intensity?: number;
+  prevText?: string;
+  nextText?: string;
   character?: Character;
   genre?: string;
   narrationStyle?: string;

@@ -490,6 +490,10 @@ export class ReaderEngine {
           text: seg.text,
           emotion: seg.emotion,
           delivery: seg.delivery,
+          tags: seg.tags,
+          intensity: seg.intensity,
+          prevText: this.neighbour(seg, -1),
+          nextText: this.neighbour(seg, 1),
           speaker: seg.speaker,
           character: this.character(seg.speaker),
           genre: this.meta.genre,
@@ -626,7 +630,7 @@ export class ReaderEngine {
     }
   }
 
-  private speakBrowser(seg: Segment, t: number) {
+  private speakBrowser(seg: Segment, t: number, onEnd: () => void = () => this.advance()) {
     const synth = window.speechSynthesis;
     const u = new SpeechSynthesisUtterance(seg.text);
     const voiceId = this.casting[seg.speaker] ?? this.casting.Narrator;
@@ -637,11 +641,11 @@ export class ReaderEngine {
       v = all.find((x) => x.lang.toLowerCase().replace("_", "-").startsWith(want)) ?? v;
     if (v) u.voice = v;
     u.lang = v?.lang || this.meta.language || "en";
-    const p = browserProsody(seg.emotion, seg.speaker === "Narrator" ? undefined : this.character(seg.speaker));
+    const p = browserProsody(seg.emotion, seg.speaker === "Narrator" ? undefined : this.character(seg.speaker), seg.intensity ?? 1);
     u.rate = Math.min(4, p.rate * this.rate);
     u.pitch = p.pitch;
     u.volume = p.volume;
-    u.onend = () => t === this.token && this.advance();
+    u.onend = () => t === this.token && onEnd();
     u.onerror = (e) => {
       if (t !== this.token || e.error === "interrupted" || e.error === "canceled") return;
       this.fail(new Error(`This device's voice failed (${e.error}). Try another voice in 🎭 Voices.`));
@@ -649,11 +653,77 @@ export class ReaderEngine {
     synth.speak(u);
   }
 
+  /** A short, natural silence between lines — longer after headings, scene changes and speaker changes. */
+  private gapAfter(seg: Segment, next?: Segment): number {
+    if (!next) return 0;
+    let ms = 140;
+    if (next.speaker !== seg.speaker) ms = 320;
+    if (/heading/i.test(seg.delivery ?? "") || (seg.text.length < 80 && !/[.!?…"”»]$/.test(seg.text))) ms = 750;
+    if (/(…|\.\.\.)$/.test(seg.text)) ms = Math.max(ms, 520);
+    if (next.chunk !== seg.chunk) ms = Math.max(ms, 600);
+    if ((next.tags ?? []).some((t) => /pause/i.test(t))) ms += 400;
+    return ms / Math.max(0.75, this.rate);
+  }
+
+  private neighbour(seg: Segment, dir: -1 | 1): string | undefined {
+    const i = this.segments.indexOf(seg);
+    return i < 0 ? undefined : this.segments[i + dir]?.text;
+  }
+
   private advance() {
+    const seg = this.segments[this.index];
     this.index++;
     this.loadedKey = "";
-    if (this.playing) this.playCurrent();
-    else this.onChange();
+    if (!this.playing) return this.onChange();
+    const gap = seg ? this.gapAfter(seg, this.segments[this.index]) : 0;
+    const t = this.token;
+    this.onChange();
+    if (gap) setTimeout(() => this.playing && t === this.token && this.playCurrent(), gap);
+    else this.playCurrent();
+  }
+
+  // ---------- voice preview ----------
+
+  private previewAudio: HTMLAudioElement | null = null;
+  previewing = "";
+
+  /** Plays a short sample of the voice currently cast for `speaker`. */
+  async preview(speaker: string) {
+    this.pause();
+    this.unlock();
+    this.previewAudio?.pause();
+    const line =
+      this.segments.find((s) => s.speaker === speaker && s.text.length > 25 && s.text.length < 220) ??
+      this.segments.find((s) => s.speaker === speaker);
+    const sample: Segment = line ?? {
+      id: `preview-${speaker}`,
+      chunk: -1,
+      speaker,
+      emotion: "neutral",
+      text: speaker === "Narrator" ? "Once upon a time, in a quiet town by the sea, a story was waiting to be told." : `Hello. My name is ${speaker}.`,
+    };
+    this.previewing = speaker;
+    this.onChange();
+    try {
+      if (this.provider === "browser") {
+        const t = ++this.token;
+        await new Promise<void>((resolve) => {
+          this.speakBrowser(sample, t, resolve);
+          setTimeout(resolve, 15000); // safety net if the device never fires "end"
+        });
+      } else {
+        const url = await this.audioFor({ ...sample, id: `preview-${sample.id}` });
+        this.previewAudio = new Audio(url);
+        this.previewAudio.playbackRate = this.rate;
+        await this.previewAudio.play();
+        await new Promise((r) => this.previewAudio!.addEventListener("ended", r, { once: true }));
+      }
+    } catch (e) {
+      this.error = e instanceof Error ? e.message : String(e);
+    } finally {
+      this.previewing = "";
+      this.onChange();
+    }
   }
 
   private evictOld() {

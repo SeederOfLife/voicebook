@@ -90,14 +90,39 @@ const FEMALE =
 const MALE =
   /\bmale\b|\bman\b|daniel|alex|fred|tom|oliver|thomas|jorge|diego|juan|luca|yuri|xander|rishi|aaron|arthur|gordon|reed|ralph|guy|ryan|david|mark|george|james|henri|paul|stefan|jakub|antonin|antonín|nicolas|eddy|grandpa|rocko/i;
 
+// Joke / robotic voices shipped with macOS & iOS — never use them for reading.
+const NOVELTY =
+  /\b(albert|bad news|bahh|bells|boing|bubbles|cellos|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|deranged|hysterical|pipe organ|princess|junior|ralph|kathy|fred|grandma|grandpa|rocko|shelley|flo|reed|sandy|eddy)\b/i;
+
+/** Higher = more natural. Neural / "Natural" / "Premium" / "Enhanced" voices sound far better. */
+export function voiceQuality(v: SpeechSynthesisVoice): number {
+  const n = v.name;
+  if (NOVELTY.test(n) || /espeak|eloquence|compact/i.test(n + v.voiceURI)) return -100;
+  let q = 0;
+  if (/natural|neural/i.test(n)) q += 60; // Microsoft Edge "… Online (Natural)"
+  if (/premium/i.test(n)) q += 55; // Apple premium (downloaded)
+  if (/enhanced|siri/i.test(n)) q += 45; // Apple enhanced / Siri
+  if (/online/i.test(n)) q += 20;
+  if (/^google/i.test(n)) q += 30; // Chrome's Google voices
+  if (/microsoft/i.test(n) && !/natural|online/i.test(n)) q -= 10; // old SAPI voices
+  if (/samantha|daniel|karen|moira|serena|arthur|martha|amélie|amelie|thomas|anna|zuzana/i.test(n)) q += 8;
+  if (v.default) q += 2;
+  return q;
+}
+
 export function browserVoiceOptions(): VoiceOption[] {
   if (typeof window === "undefined" || !("speechSynthesis" in window)) return [];
-  return window.speechSynthesis.getVoices().map((v) => ({
-    id: v.voiceURI,
-    name: `${v.name} (${v.lang})`,
-    lang: v.lang,
-    gender: /female/i.test(v.name) ? "female" : MALE.test(v.name) ? "male" : FEMALE.test(v.name) ? "female" : "neutral",
-  }));
+  return window.speechSynthesis
+    .getVoices()
+    .map((v) => ({ v, q: voiceQuality(v) }))
+    .filter(({ q }) => q > -100)
+    .sort((a, b) => b.q - a.q)
+    .map(({ v, q }) => ({
+      id: v.voiceURI,
+      name: `${q >= 40 ? "★ " : ""}${v.name.replace(/\s*\(.*?\)\s*/g, " ").replace(/Microsoft |Google /, "").trim()} (${v.lang})`,
+      lang: v.lang,
+      gender: /female/i.test(v.name) ? "female" : MALE.test(v.name) ? "male" : FEMALE.test(v.name) ? "female" : "neutral",
+    }));
 }
 
 const EMOTION_PROSODY: Record<Emotion, { rate: number; pitch: number; volume: number }> = {
@@ -118,7 +143,7 @@ const EMOTION_PROSODY: Record<Emotion, { rate: number; pitch: number; volume: nu
 };
 
 /** Pitch/rate so characters sound different even with a single system voice. */
-export function browserProsody(emotion: Emotion, character?: Character) {
+export function browserProsody(emotion: Emotion, character?: Character, intensity = 1) {
   let pitch = 1;
   let rate = 1;
   if (character) {
@@ -135,10 +160,11 @@ export function browserProsody(emotion: Emotion, character?: Character) {
     pitch += ((hash(character.name) % 9) - 4) * 0.025; // small per-character offset
   }
   const e = EMOTION_PROSODY[emotion] ?? EMOTION_PROSODY.neutral;
+  const k = [0, 0.7, 1, 1.45][Math.min(3, Math.max(1, intensity))];
   const clamp = (n: number, a: number, b: number) => Math.min(b, Math.max(a, n));
   return {
-    pitch: clamp(pitch + e.pitch, 0.1, 2),
-    rate: clamp(rate * e.rate, 0.5, 2),
-    volume: e.volume,
+    pitch: clamp(pitch + e.pitch * k, 0.1, 2),
+    rate: clamp(rate * (1 + (e.rate - 1) * k), 0.5, 2),
+    volume: clamp(1 - (1 - e.volume) * k, 0.2, 1),
   };
 }

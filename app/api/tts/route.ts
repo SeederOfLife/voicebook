@@ -1,5 +1,5 @@
 import { denied, getAccess, premiumOnly } from "@/lib/access";
-import { elevenText, openAIInstructions } from "@/lib/prompts";
+import { elevenStability, elevenText, openAIInstructions } from "@/lib/prompts";
 import type { TTSRequest } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -55,8 +55,11 @@ export async function POST(req: Request) {
         body: JSON.stringify({
           text: elevenText(r, isV3),
           model_id: model,
-          // v3 stability: 0 = creative, 0.5 = natural, 1 = robust
-          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+          voice_settings: isV3
+            ? { stability: elevenStability(r), similarity_boost: 0.75 }
+            : { stability: 0.4, similarity_boost: 0.8, style: Math.min(0.6, 0.15 * (r.intensity ?? 1)), use_speaker_boost: true },
+          // Older models use neighbouring text for smoother, continuous intonation.
+          ...(isV3 ? {} : { previous_text: r.prevText?.slice(-400), next_text: r.nextText?.slice(0, 400) }),
         }),
       },
     );

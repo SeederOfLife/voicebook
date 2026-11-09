@@ -453,6 +453,15 @@ export default function Home() {
             {panel === "cast" && (
               <section className="cast card">
                 {voices.length === 0 && <p className="muted small">No voices available for this engine on this device.</p>}
+                {e.provider === "browser" && voices.length > 0 && !voices.some((v) => v.name.startsWith("★")) && (
+                  <p className="tip small">
+                    💡 Your device only has basic voices. For much more natural free voices:
+                    <br />• <strong>iPhone/iPad:</strong> Settings → Accessibility → Spoken Content → Voices → pick your language → download an <em>Enhanced</em> or <em>Premium</em> voice.
+                    <br />• <strong>Android:</strong> Settings → Speech → Text-to-speech → Google → install voice data.
+                    <br />• <strong>Computer:</strong> use Microsoft Edge (its “Natural” voices are excellent) or Chrome.
+                    <br />Then reopen the app. Voices marked ★ are the natural ones.
+                  </p>
+                )}
                 {speakers.map((name) => {
                   const ch = e.character(name);
                   return (
@@ -463,6 +472,14 @@ export default function Home() {
                         {ch && <small className="muted"> {ch.gender !== "neutral" ? ch.gender : ""} {ch.age !== "adult" ? ch.age : ""} {ch.traits ? `· ${ch.traits}` : ""}</small>}
                       </span>
                       <div className="cast-selects">
+                        <button
+                          className="preview-btn"
+                          onClick={() => e.preview(name)}
+                          disabled={!!e.previewing}
+                          aria-label={`Preview ${name}'s voice`}
+                        >
+                          {e.previewing === name ? <span className="spinner inline" /> : "▶"}
+                        </button>
                         <select value={e.casting[name] ?? ""} onChange={(x) => e.setVoice(name, x.target.value)} aria-label={`Voice for ${name}`}>
                           {voices.map((v) => (
                             <option key={v.id} value={v.id}>{v.name}{v.gender !== "neutral" ? ` (${v.gender[0].toUpperCase()})` : ""}</option>
