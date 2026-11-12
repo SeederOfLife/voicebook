@@ -2,6 +2,7 @@
 // fetches/prefetches speech, plays segments in order, remembers your place,
 // and drives the premium soundscape + sound effects.
 import { splitLongSegments, splitSentences } from "./chunk";
+import { BUILTIN_VOICES, BuiltinVoices } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
 import { library, type BookRecord } from "./library";
 import { Soundscape } from "./soundscape";
@@ -92,6 +93,8 @@ export class ReaderEngine {
   browserVoices: VoiceOption[] = [];
   prefs: Prefs = { ambience: true, music: true, sfx: true, bgVolume: 0.6 };
   soundscape = new Soundscape();
+  builtin: BuiltinVoices;
+  notice: string | null = null;
 
   private audio: HTMLAudioElement;
   private cache = new Map<string, Promise<string>>();
@@ -107,6 +110,7 @@ export class ReaderEngine {
   constructor(private onChange: () => void) {
     this.audio = new Audio();
     this.audio.preload = "auto";
+    this.builtin = new BuiltinVoices(onChange);
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;
     try {
@@ -154,6 +158,7 @@ export class ReaderEngine {
     const p: Provider[] = [];
     if (this.premium && this.config?.providers.elevenlabs) p.push("elevenlabs");
     if (this.premium && this.config?.providers.openai) p.push("openai");
+    if (typeof Worker !== "undefined" && typeof WebAssembly !== "undefined") p.push("builtin");
     p.push("browser");
     return p;
   }
@@ -204,6 +209,10 @@ export class ReaderEngine {
     this.scenes.clear();
     this.aiUsed = false;
     this.error = null;
+    this.notice = null;
+    const preferred = store.get("vb:provider") as Provider | null;
+    if (preferred && preferred !== this.provider && this.availableProviders().includes(preferred)) this.provider = preferred;
+    this.casting = this.castingByProvider[this.provider] ?? {};
     this.recast();
     const pos = book.position ?? { chunk: 0, offset: 0 };
     this.startAt(Math.min(pos.chunk, this.chunks.length - 1), pos.offset);
@@ -287,6 +296,7 @@ export class ReaderEngine {
   voicesFor(p: Provider = this.provider): VoiceOption[] {
     if (p === "openai") return this.config?.voices.openai ?? [];
     if (p === "elevenlabs") return this.config?.voices.elevenlabs ?? [];
+    if (p === "builtin") return BUILTIN_VOICES;
     const lang = this.meta.language;
     const matching = lang ? this.browserVoices.filter((v) => v.lang?.toLowerCase().startsWith(lang)) : [];
     return matching.length ? matching : this.browserVoices;
@@ -345,6 +355,13 @@ export class ReaderEngine {
     if (!this.meta.genre || (this.meta.genre === "other" && a.genre !== "other")) this.meta.genre = a.genre;
     if (!this.meta.language && a.language) this.meta.language = a.language;
     if (!this.meta.narrationStyle && a.narrationStyle) this.meta.narrationStyle = a.narrationStyle;
+    if (this.provider === "builtin") {
+      if (this.meta.language && !this.meta.language.toLowerCase().startsWith("en")) {
+        // The built-in voice pack only speaks English.
+        this.setProvider("browser", false);
+        this.notice = `The built-in AI voices only speak English, so this ${this.meta.language.toUpperCase()} book uses your device's voices.`;
+      } else this.builtin.warm();
+    }
     if (a.scene) this.scenes.set(c, a.scene);
 
     const byName = new Map(this.characters.map((ch) => [ch.name.toLowerCase(), ch]));
@@ -448,7 +465,8 @@ export class ReaderEngine {
     this.onChange();
   }
 
-  setProvider(p: Provider) {
+  setProvider(p: Provider, remember = true) {
+    if (remember) this.notice = null;
     if (!this.availableProviders().includes(p)) {
       this.premiumPrompt = true;
       this.onChange();
@@ -457,7 +475,8 @@ export class ReaderEngine {
     this.pause();
     this.provider = p;
     this.loadedKey = "";
-    store.set("vb:provider", p);
+    if (remember) store.set("vb:provider", p);
+    if (p === "builtin" && remember) this.builtin.warm();
     this.casting = this.castingByProvider[p] ?? {};
     this.recast();
     this.saveBookState();
@@ -492,6 +511,12 @@ export class ReaderEngine {
   private audioFor(seg: Segment): Promise<string> {
     const key = this.keyFor(seg);
     let p = this.cache.get(key);
+    if (!p && this.provider === "builtin") {
+      const pr = browserProsody(seg.emotion, undefined, seg.intensity ?? 1);
+      p = this.builtin.generate(seg.text, this.casting[seg.speaker] ?? this.casting.Narrator ?? "af_heart", pr.rate);
+      p.catch(() => this.cache.delete(key));
+      this.cache.set(key, p);
+    }
     if (!p) {
       p = fetch("/api/tts", {
         method: "POST",
@@ -627,6 +652,7 @@ export class ReaderEngine {
         if (next) this.audioFor(next).catch(() => {});
       }
       this.audio.src = url;
+      this.audio.volume = this.provider === "builtin" ? browserProsody(seg.emotion, undefined, seg.intensity ?? 1).volume : 1;
       this.audio.defaultPlaybackRate = this.rate;
       this.audio.playbackRate = this.rate;
       this.loadedKey = this.keyFor(seg);
@@ -638,7 +664,14 @@ export class ReaderEngine {
       this.onChange();
       this.evictOld();
     } catch (e) {
-      if (t === this.token) this.fail(e);
+      if (t !== this.token) return;
+      if (this.provider === "builtin" && this.browserVoices.length) {
+        // Keep reading with the device's voices rather than stopping.
+        this.setProvider("browser", false);
+        this.notice = "The built-in AI voices couldn't load here (weak connection or not enough memory), so your device's voices are reading instead.";
+        this.playing = true;
+        this.playCurrent();
+      } else this.fail(e);
     }
   }
 

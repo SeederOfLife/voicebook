@@ -87,7 +87,7 @@ export interface Analysis {
   scene?: Scene;
 }
 
-export type Provider = "elevenlabs" | "openai" | "browser";
+export type Provider = "elevenlabs" | "openai" | "builtin" | "browser";
 
 export interface VoiceOption {
   id: string;

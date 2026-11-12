@@ -13,6 +13,7 @@ import { hash } from "@/lib/voices";
 const PROVIDER_LABEL: Record<Provider, string> = {
   elevenlabs: "ElevenLabs · most expressive",
   openai: "OpenAI · expressive",
+  builtin: "Built-in AI voices · free",
   browser: "Device voices · free",
 };
 
@@ -554,6 +555,7 @@ export default function Home() {
               const c = Math.floor(((x.clientX - r.left) / r.width) * e.chunks.length);
               e.jumpToChunk(Math.max(0, Math.min(e.chunks.length - 1, c)));
             }}><div style={{ width: `${progress * 100}%` }} /></div>
+            {e.notice && <p className="muted small notice">{e.notice}</p>}
             {e.error && (
               <p className="error small">
                 {e.error}
@@ -569,6 +571,9 @@ export default function Home() {
                   <button className="link-btn" onClick={() => setSidebar(true)}>{e.chapters[chapterIdx]?.title ?? `part ${current.chunk + 1}`}</button>
                 </>
               ) : "Getting ready…"}
+              {e.provider === "builtin" && e.builtin.progress !== null && !e.builtin.ready && (
+                <span className="dl"> · downloading voice pack {Math.round(e.builtin.progress * 100)}% (one time)</span>
+              )}
             </div>
             <div className="controls">
               <select className="speed" value={e.rate} onChange={(x) => e.setRate(Number(x.target.value))} aria-label="Speed">

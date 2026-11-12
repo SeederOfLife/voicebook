@@ -237,3 +237,6 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .perks { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; line-height: 1.4; }
 .btn.wide { width: 100%; }
 .stack { display: grid; gap: 8px; }
+
+.dl { color: var(--accent); text-transform: none; }
+.notice { text-align: center; margin: 8px auto 0; }

@@ -7,3 +7,5 @@ out
 *.tsbuildinfo
 next-env.d.ts
 public/pdf.worker.min.mjs
+public/voice/kokoro.web.js
+public/voice/ort-wasm-*
