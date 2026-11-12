@@ -13,7 +13,7 @@ import { hash } from "@/lib/voices";
 const PROVIDER_LABEL: Record<Provider, string> = {
   elevenlabs: "ElevenLabs · most expressive",
   openai: "OpenAI · expressive",
-  builtin: "Built-in AI voices · free (computers)",
+  builtin: "Built-in AI voices · free",
   browser: "Device voices · free",
 };
 
@@ -453,6 +453,14 @@ export default function Home() {
 
             {panel === "cast" && (
               <section className="cast card">
+                {e.builtinIsOptional && (
+                  <label className="toggle">
+                    <input type="checkbox" checked={e.builtinOn} onChange={(x) => e.setBuiltin(x.target.checked)} /> Built-in AI voices
+                    <span className="muted small">
+                      Experimental on phones: downloads about 90 MB once and needs a lot of memory. If the page closes itself, it will be switched off again automatically. English books only.
+                    </span>
+                  </label>
+                )}
                 {voices.length === 0 && <p className="muted small">No voices available for this engine on this device.</p>}
                 {e.provider === "browser" && voices.length > 0 && !voices.some((v) => v.name.startsWith("★")) && (
                   <p className="tip small">

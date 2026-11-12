@@ -2,7 +2,7 @@
 // fetches/prefetches speech, plays segments in order, remembers your place,
 // and drives the premium soundscape + sound effects.
 import { splitLongSegments, splitSentences } from "./chunk";
-import { BUILTIN_VOICES, BuiltinVoices, builtinSupported } from "./builtin";
+import { BUILTIN_VOICES, BuiltinVoices, builtinCrashedLastTime, builtinNeedsOptIn, builtinOptedIn, builtinSupported, setBuiltinOptIn } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
 import { library, type BookRecord } from "./library";
 import { Soundscape } from "./soundscape";
@@ -111,6 +111,10 @@ export class ReaderEngine {
     this.audio = new Audio();
     this.audio.preload = "auto";
     this.builtin = new BuiltinVoices(onChange);
+    if (builtinCrashedLastTime()) {
+      if (store.get("vb:provider") === "builtin") store.set("vb:provider", "browser");
+      this.notice = "The built-in AI voices needed more memory than this browser allows and it closed the page, so they've been switched off. Your device's voices are reading instead.";
+    }
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;
     try {
@@ -172,6 +176,23 @@ export class ReaderEngine {
     return p;
   }
 
+  /** On phones the built-in AI voices are an opt-in switch (they can run out of memory). */
+  get builtinIsOptional() {
+    return builtinNeedsOptIn();
+  }
+  get builtinOn() {
+    return builtinOptedIn();
+  }
+  setBuiltin(on: boolean) {
+    setBuiltinOptIn(on);
+    if (on) this.setProvider("builtin");
+    else {
+      this.builtin.stop();
+      if (this.provider === "builtin") this.setProvider("browser");
+    }
+    this.onChange();
+  }
+
   setPassword(pw: string) {
     this.password = pw;
     store.set("vb:password", pw);
@@ -209,7 +230,6 @@ export class ReaderEngine {
     this.scenes.clear();
     this.aiUsed = false;
     this.error = null;
-    this.notice = null;
     const preferred = store.get("vb:provider") as Provider | null;
     if (preferred && preferred !== this.provider && this.availableProviders().includes(preferred)) this.provider = preferred;
     this.casting = this.castingByProvider[this.provider] ?? {};

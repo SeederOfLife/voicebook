@@ -35,12 +35,51 @@ export const BUILTIN_VOICES: VoiceOption[] = [
  * The voice pack needs a few hundred MB of memory. Phone and tablet browsers kill the
  * tab when it loads (seen on iPhone), so it is only offered on computers.
  */
-export function builtinSupported(): boolean {
-  if (typeof window === "undefined" || typeof Worker === "undefined" || typeof WebAssembly === "undefined") return false;
+const OPT_IN = "vb:builtin-optin";
+const PENDING = "vb:builtin-pending";
+const ls = {
+  get: (k: string) => {
+    try {
+      return localStorage.getItem(k);
+    } catch {
+      return null;
+    }
+  },
+  set: (k: string, v: string | null) => {
+    try {
+      v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v);
+    } catch {}
+  },
+};
+
+const canRun = () => typeof window !== "undefined" && typeof Worker !== "undefined" && typeof WebAssembly !== "undefined";
+
+/** Phones, tablets and low-memory devices: the pack is off unless the person switches it on. */
+export function builtinNeedsOptIn(): boolean {
+  if (!canRun()) return false;
   const ua = navigator.userAgent;
   const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
-  const lowMemory = ((navigator as any).deviceMemory ?? 8) < 4;
-  return !mobile && !lowMemory;
+  return mobile || ((navigator as any).deviceMemory ?? 8) < 4;
+}
+
+export const builtinOptedIn = () => ls.get(OPT_IN) === "1";
+export function setBuiltinOptIn(on: boolean) {
+  ls.set(OPT_IN, on ? "1" : null);
+  if (!on) ls.set(PENDING, null);
+}
+
+/**
+ * If the browser killed the tab while the pack was working last time, switch it back
+ * off so the app can't get stuck in a crash loop. Returns true when that happened.
+ */
+export function builtinCrashedLastTime(): boolean {
+  if (!builtinNeedsOptIn() || ls.get(PENDING) !== "1") return false;
+  setBuiltinOptIn(false);
+  return true;
+}
+
+export function builtinSupported(): boolean {
+  return canRun() && (!builtinNeedsOptIn() || builtinOptedIn());
 }
 
 export class BuiltinVoices {
@@ -71,6 +110,7 @@ export class BuiltinVoices {
       const p = this.pending.get(m.id);
       if (!p) return;
       this.pending.delete(m.id);
+      if (!this.pending.size) ls.set(PENDING, null);
       if (m.error) p.reject(new Error(`Built-in voice failed: ${m.error}`));
       else p.resolve(URL.createObjectURL(new Blob([m.buffer], { type: "audio/wav" })));
     };
@@ -78,6 +118,7 @@ export class BuiltinVoices {
       const err = new Error("Built-in voices couldn't load on this device. Try the device voices instead.");
       this.pending.forEach((p) => p.reject(err));
       this.pending.clear();
+      ls.set(PENDING, null);
       this.worker = null;
       this.progress = null;
       this.onChange();
@@ -86,15 +127,27 @@ export class BuiltinVoices {
     return w;
   }
 
-  /** Start downloading the voice pack in the background. */
+  /** Start downloading the voice pack in the background (not on phones: only when actually used). */
   warm() {
+    if (builtinNeedsOptIn()) return;
     this.start().postMessage({ type: "load" });
+  }
+
+  stop() {
+    this.worker?.terminate();
+    this.worker = null;
+    this.pending.forEach((p) => p.reject(new Error("Built-in voices turned off")));
+    this.pending.clear();
+    this.progress = null;
+    this.ready = false;
+    ls.set(PENDING, null);
   }
 
   generate(text: string, voice: string, speed: number): Promise<string> {
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
+      if (builtinNeedsOptIn()) ls.set(PENDING, "1");
       this.start().postMessage({ id, text, voice, speed });
     });
   }
