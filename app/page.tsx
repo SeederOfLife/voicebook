@@ -259,7 +259,7 @@ export default function Home() {
   const signedOut = cfg.mode === "accounts" && !cfg.user;
   const hasBook = e.chunks.length > 0;
   const current = e.segments[e.index];
-  const progress = hasBook && current ? (current.chunk + 1) / e.chunks.length : 0;
+  const progress = hasBook ? e.progress() : 0;
   const voices = e.voicesFor();
   const speakers = ["Narrator", ...e.characters.map((c) => c.name)];
   const chapterIdx = e.currentChapterIndex();
@@ -598,7 +598,7 @@ export default function Home() {
               <li>🔊 Sound effects when the story calls for them</li>
             </ul>
             {cfg.mode === "open" ? (
-              <p className="muted small">This server runs in personal mode. Add a voice API key (ElevenLabs or OpenAI) to unlock the premium voices.</p>
+              <p className="muted small">Everything is unlocked. Lifelike AI voices need a voice API key (ElevenLabs or OpenAI) on the server.</p>
             ) : cfg.billing ? (
               <button className="btn primary wide" onClick={startCheckout}>{cfg.user ? "Upgrade now" : "Sign in to upgrade"}</button>
             ) : (

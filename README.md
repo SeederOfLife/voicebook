@@ -9,7 +9,7 @@ Upload a **PDF, EPUB, TXT, Markdown or HTML** and listen to it like a real audio
 - **Emotion and intonation.** Each line is tagged *sad, angry, whispering, excited, fearful…*, and the voice performs it.
 - **Chapters sidebar.** It uses the PDF bookmarks, the EPUB chapters, or headings like "Chapter 3" / "Kapitola 2" / "Chapitre 4". Tap a chapter to jump to it.
 - **Remembers your place.** Each book is saved on the device with the exact sentence you stopped at, plus your voice choices. Open the app and tap *Continue listening*.
-- **Premium (accounts):** expressive AI voices, accents, sound effects, ambience that follows the scene (rain, storm, sea, fire, forest, night, city, cave) and background music that follows the mood.
+- **All included:** expressive AI voices, accents, sound effects, ambience that follows the scene (rain, storm, sea, fire, forest, night, city, cave) and background music that follows the mood.
 - Works on phones: lock-screen controls, speed control, and it keeps reading while you scroll.
 
 ---
@@ -41,8 +41,8 @@ Optional: `ANTHROPIC_MODEL` (default `claude-haiku-5-5`; `claude-sonnet-5-5` is 
 
 ### Personal mode vs. accounts mode
 
-- **Personal mode** (default, no Supabase variables): everything is unlocked for you. Set `APP_PASSWORD`!
-- **Accounts mode**: turns on automatically when the Supabase variables below are set. Visitors sign in (email link or Google). Free users get device voices plus the AI analysis; **Premium** users get the AI voices, accents, sound effects, ambience and music.
+- **Open mode** (default): every feature is unlocked for everyone who opens the app, with no sign-in. Anyone with the link uses *your* API credits, so set `APP_PASSWORD` unless you want that.
+- **Accounts mode**: turns on only when you set `PAYWALL=on` **and** the Supabase variables below. Visitors sign in (email link or Google). Free users get device voices plus the AI analysis; **Premium** users get the AI voices, accents, sound effects, ambience and music.
 
 ## 4. Accounts (Supabase), optional
 
@@ -85,6 +85,7 @@ Book file ─► (browser) extract text + chapters ─► split into parts
                                      player: prefetch, highlight, chapters, resume
 ```
 
+- **Analysis is saved per book** on the device, so reopening a book or jumping back is instant and isn't charged twice.
 - **Files stay on your device.** Books are read in the browser and saved locally (IndexedDB). Only the passage being prepared is sent for analysis or speech.
 - **Ambience and music are generated live** with the Web Audio API: no audio files, no licensing, no extra cost.
 - **Costs** (your API accounts): analysis costs a few cents per book with Haiku. Voices are the main cost: ElevenLabs charges per character, OpenAI is cheaper. A 300-page novel is about 600k characters, so try the sample first.

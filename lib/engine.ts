@@ -1,7 +1,7 @@
 // The reading engine: analyses the book part by part, casts voices,
 // fetches/prefetches speech, plays segments in order, remembers your place,
 // and drives the premium soundscape + sound effects.
-import { splitLongSegments } from "./chunk";
+import { splitLongSegments, splitSentences } from "./chunk";
 import { heuristicAnalyze } from "./heuristic";
 import { library, type BookRecord } from "./library";
 import { Soundscape } from "./soundscape";
@@ -248,6 +248,14 @@ export class ReaderEngine {
     if (wasPlaying) this.playCurrent();
   }
 
+  /** 0–1 through the whole book. */
+  progress(): number {
+    const seg = this.segments[this.index];
+    if (!seg || !this.chunks.length) return 0;
+    const inChunk = this.segments.filter((s) => s.chunk === seg.chunk);
+    return (seg.chunk + inChunk.indexOf(seg) / Math.max(1, inChunk.length)) / this.chunks.length;
+  }
+
   currentChapterIndex(): number {
     const c = this.segments[this.index]?.chunk ?? this.analyzedUpTo + 1;
     let idx = 0;
@@ -299,8 +307,10 @@ export class ReaderEngine {
     this.onChange();
     this.analyzePromise = (async () => {
       const text = this.chunks[c];
-      let a: Analysis | null = null;
-      if (!this.aiUnavailable) {
+      const bookId = this.bookId;
+      let a: Analysis | null = (bookId && (await library.getAnalysis(bookId, c))) || null;
+      if (a) this.aiUsed = true;
+      if (!a && !this.aiUnavailable) {
         try {
           const r = await fetch("/api/analyze", {
             method: "POST",
@@ -315,6 +325,7 @@ export class ReaderEngine {
           else if (r.ok) {
             a = await r.json();
             this.aiUsed = true;
+            if (a && bookId) library.putAnalysis(bookId, c, a);
           }
         } catch {
           /* network error: fall back for this part */
@@ -385,6 +396,7 @@ export class ReaderEngine {
   }
 
   play() {
+    this.previewAudio?.pause();
     if (this.premium) this.soundscape.unlock();
     const seg = this.segments[this.index];
     if (this.provider !== "browser" && seg && this.loadedKey === this.keyFor(seg) && this.audio.currentTime > 0 && !this.audio.ended) {
@@ -632,26 +644,36 @@ export class ReaderEngine {
 
   private speakBrowser(seg: Segment, t: number, onEnd: () => void = () => this.advance()) {
     const synth = window.speechSynthesis;
-    const u = new SpeechSynthesisUtterance(seg.text);
     const voiceId = this.casting[seg.speaker] ?? this.casting.Narrator;
     const all = synth.getVoices();
     let v = all.find((x) => x.voiceURI === voiceId);
     const want = ACCENT_LANG[this.accents[seg.speaker] ?? ""];
     if (want && this.premium && !v?.lang.toLowerCase().replace("_", "-").startsWith(want))
       v = all.find((x) => x.lang.toLowerCase().replace("_", "-").startsWith(want)) ?? v;
-    if (v) u.voice = v;
-    u.lang = v?.lang || this.meta.language || "en";
     const p = browserProsody(seg.emotion, seg.speaker === "Narrator" ? undefined : this.character(seg.speaker), seg.intensity ?? 1);
-    u.rate = Math.min(4, p.rate * this.rate);
-    u.pitch = p.pitch;
-    u.volume = p.volume;
-    u.onend = () => t === this.token && onEnd();
-    u.onerror = (e) => {
-      if (t !== this.token || e.error === "interrupted" || e.error === "canceled") return;
-      this.fail(new Error(`This device's voice failed (${e.error}). Try another voice in 🎭 Voices.`));
+    // Speak sentence by sentence: some browsers silently cut off long utterances (~15 s).
+    const pieces = splitSentences(seg.text, 180);
+    const speakPiece = (i: number) => {
+      if (t !== this.token) return;
+      if (i >= pieces.length) return onEnd();
+      const u = new SpeechSynthesisUtterance(pieces[i]);
+      if (v) u.voice = v;
+      u.lang = v?.lang || this.meta.language || "en";
+      u.rate = Math.min(4, p.rate * this.rate);
+      u.pitch = p.pitch;
+      u.volume = p.volume;
+      u.onend = () => speakPiece(i + 1);
+      u.onerror = (e) => {
+        if (t !== this.token || e.error === "interrupted" || e.error === "canceled") return;
+        this.fail(new Error(`This device's voice failed (${e.error}). Try another voice in 🎭 Voices.`));
+      };
+      this.utterance = u; // keep a reference: some browsers drop the "end" event otherwise
+      synth.speak(u);
     };
-    synth.speak(u);
+    speakPiece(0);
   }
+
+  private utterance: SpeechSynthesisUtterance | null = null;
 
   /** A short, natural silence between lines — longer after headings, scene changes and speaker changes. */
   private gapAfter(seg: Segment, next?: Segment): number {

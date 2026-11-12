@@ -70,8 +70,21 @@ export interface Section {
   text: string;
 }
 
-const HEADING_RE =
-  /^(#{1,3}\s+\S.*|(chapter|chapitre|kapitola|capítulo|capitulo|capitolo|kapitel|hoofdstuk|rozdział|глава|part|partie|část|teil|book|livre|kniha|prologue|prolog|epilogue|épilogue|epilog|introduction|úvod|einleitung|conclusion|závěr|preface|préface|předmluva|vorwort|foreword|afterword|appendix|annexe|příloha)\b.{0,70}|[IVXLC]{1,6}\.?|\d{1,3}\.?)$/i;
+const NUM = String.raw`(\d{1,3}|[ivxlc]{1,7}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|un|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|premier|première|první|druhá|třetí)`;
+// "Chapter 3", "CHAPTER THREE — The Storm", "Kapitola 2: Bouře", "Part II"
+const NUMBERED_RE = new RegExp(
+  String.raw`^(chapter|chapitre|kapitola|capítulo|capitulo|capitolo|kapitel|hoofdstuk|rozdział|глава|part|partie|část|teil|book|livre|kniha)\s+${NUM}\b\.?(\s*[:.\-–—]?\s+\S.{0,60})?$`,
+  "i",
+);
+// "Prologue", "Epilogue — Ten years later", "Appendix B"
+const NAMED_RE =
+  /^(prologue|prolog|epilogue|épilogue|epilog|introduction|úvod|einleitung|conclusion|závěr|preface|préface|předmluva|vorwort|foreword|afterword|acknowledge?ments|appendix(\s+[a-z\d])?|annexe(\s+[a-z\d])?|příloha(\s+[a-z\d])?)(\s*[:\-–—]\s*\S.{0,60})?$/i;
+// "# Markdown heading", a lone Roman numeral ("IV.") or a lone number ("12")
+const BARE_RE = /^(#{1,3}\s+\S.*|[IVXLC]{1,7}\.?|\d{1,3}\.?)$/;
+
+const isHeadingLine = (p: string) =>
+  p.length <= 80 &&
+  (BARE_RE.test(p) || ((NUMBERED_RE.test(p) || NAMED_RE.test(p)) && !/[,;!?]$/.test(p) && !/[a-z]\.$/.test(p.slice(20))));
 
 const cleanHeading = (s: string) => s.replace(/^#{1,3}\s+/, "").replace(/\s+/g, " ").trim();
 
@@ -81,7 +94,7 @@ export function detectSections(text: string): Section[] {
   const sections: Section[] = [];
   let cur: Section = { title: "", text: "" };
   for (const p of paras) {
-    const isHeading = p.length <= 80 && !/[,;]$/.test(p) && HEADING_RE.test(p);
+    const isHeading = isHeadingLine(p);
     if (isHeading) {
       if (cur.text.trim()) sections.push(cur);
       // Merge "CHAPTER 1" + "The Storm" style two-line headings.

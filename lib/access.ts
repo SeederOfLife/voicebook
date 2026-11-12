@@ -1,11 +1,12 @@
 // Server-side access control.
 //
 // Two modes:
-//  • "open"     – no Supabase configured. Personal use: everything unlocked
-//                 (optionally protected with APP_PASSWORD).
-//  • "accounts" – Supabase configured. Visitors sign in; their plan
-//                 ("free" | "premium") lives in the `profiles` table and is
-//                 set by the Stripe webhook.
+//  • "open"     – the default. Every feature (AI voices, accents, sound
+//                 effects, ambience, music) is unlocked for everyone, with no
+//                 sign-in. Optionally protected with APP_PASSWORD.
+//  • "accounts" – only when PAYWALL=on and Supabase is configured. Visitors
+//                 sign in; their plan ("free" | "premium") lives in the
+//                 `profiles` table and is set by the Stripe webhook.
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Plan } from "./types";
 
@@ -19,6 +20,7 @@ export interface Access {
 }
 
 export const accountsEnabled = () =>
+  process.env.PAYWALL === "on" &&
   !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY && process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 let admin: SupabaseClient | null = null;

@@ -1,6 +1,6 @@
 // The user's library, stored on the device (IndexedDB): books, chapters,
 // the exact place you paused, and the voices you picked.
-import type { Chapter, Character, Provider } from "./types";
+import type { Analysis, Chapter, Character, Provider } from "./types";
 
 export interface BookRecord {
   id: string;
@@ -20,24 +20,41 @@ export type BookSummary = Pick<BookRecord, "id" | "title" | "openedAt" | "positi
 
 const DB = "voicebook";
 const STORE = "books";
+/** AI analysis per part of a book, so reopening or jumping back is instant and costs nothing. */
+const ANALYSIS = "analysis";
 
+let dbPromise: Promise<IDBDatabase> | null = null;
 function db(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(STORE, { keyPath: "id" });
-    req.onsuccess = () => resolve(req.result);
+  dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
+    const req = indexedDB.open(DB, 2);
+    req.onupgradeneeded = () => {
+      const d = req.result;
+      if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: "id" });
+      if (!d.objectStoreNames.contains(ANALYSIS)) d.createObjectStore(ANALYSIS);
+    };
+    req.onsuccess = () => {
+      req.result.onversionchange = () => {
+        req.result.close();
+        dbPromise = null;
+      };
+      resolve(req.result);
+    };
     req.onerror = () => reject(req.error);
   });
+  dbPromise.catch(() => (dbPromise = null));
+  return dbPromise;
 }
 
-async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>, store = STORE): Promise<T> {
   const d = await db();
   return new Promise((resolve, reject) => {
-    const r = fn(d.transaction(STORE, mode).objectStore(STORE));
+    const r = fn(d.transaction(store, mode).objectStore(store));
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
   });
 }
+
+const analysisKey = (id: string, chunk: number) => `${id}\u0000${chunk}`;
 
 export const library = {
   async get(id: string) {
@@ -52,13 +69,36 @@ export const library = {
       await tx("readwrite", (s) => s.put(book));
     } catch {}
   },
+  /** Read-modify-write inside ONE transaction, so two quick saves can't overwrite each other. */
   async patch(id: string, fields: Partial<BookRecord>) {
-    const b = await this.get(id);
-    if (b) await this.put({ ...b, ...fields });
+    try {
+      const d = await db();
+      await new Promise<void>((resolve, reject) => {
+        const t = d.transaction(STORE, "readwrite");
+        const s = t.objectStore(STORE);
+        const g = s.get(id);
+        g.onsuccess = () => g.result && s.put({ ...g.result, ...fields });
+        t.oncomplete = () => resolve();
+        t.onerror = t.onabort = () => reject(t.error);
+      });
+    } catch {}
   },
   async remove(id: string) {
     try {
       await tx("readwrite", (s) => s.delete(id));
+      await tx("readwrite", (s) => s.delete(IDBKeyRange.bound(analysisKey(id, 0).slice(0, -1), `${id}\u0000\uffff`)), ANALYSIS);
+    } catch {}
+  },
+  async getAnalysis(id: string, chunk: number) {
+    try {
+      return (await tx("readonly", (s) => s.get(analysisKey(id, chunk)), ANALYSIS)) as Analysis | undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  async putAnalysis(id: string, chunk: number, a: Analysis) {
+    try {
+      await tx("readwrite", (s) => s.put(a, analysisKey(id, chunk)), ANALYSIS);
     } catch {}
   },
   async list(): Promise<BookSummary[]> {
