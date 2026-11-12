@@ -31,6 +31,18 @@ export const BUILTIN_VOICES: VoiceOption[] = [
   { id: "af_alloy", name: "Alloy · American", gender: "female" },
 ];
 
+/**
+ * The voice pack needs a few hundred MB of memory. Phone and tablet browsers kill the
+ * tab when it loads (seen on iPhone), so it is only offered on computers.
+ */
+export function builtinSupported(): boolean {
+  if (typeof window === "undefined" || typeof Worker === "undefined" || typeof WebAssembly === "undefined") return false;
+  const ua = navigator.userAgent;
+  const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+  const lowMemory = ((navigator as any).deviceMemory ?? 8) < 4;
+  return !mobile && !lowMemory;
+}
+
 export class BuiltinVoices {
   /** null = not started, 0–1 = downloading the voice pack, 1 = ready */
   progress: number | null = null;

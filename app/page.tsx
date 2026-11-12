@@ -13,7 +13,7 @@ import { hash } from "@/lib/voices";
 const PROVIDER_LABEL: Record<Provider, string> = {
   elevenlabs: "ElevenLabs · most expressive",
   openai: "OpenAI · expressive",
-  builtin: "Built-in AI voices · free",
+  builtin: "Built-in AI voices · free (computers)",
   browser: "Device voices · free",
 };
 

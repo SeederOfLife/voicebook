@@ -35,7 +35,7 @@ Upload a **PDF, EPUB, TXT, Markdown or HTML** and listen to it like a real audio
 | `OPENAI_API_KEY` | Expressive voices steered by acting directions (gpt-4o-mini-tts) | platform.openai.com |
 | `APP_PASSWORD` | *(personal mode)* protects your app so nobody else uses your credits | anything you choose |
 
-**Built-in AI voices (no key needed):** the app includes a neural voice pack (Kokoro) that runs inside the browser: 27 English voices, American and British. The first use downloads about 90 MB once; after that it is cached. It speaks **English only**; other languages use the device voices or the API voices.
+**Built-in AI voices (no key needed):** the app includes a neural voice pack (Kokoro) that runs inside the browser: 27 English voices, American and British. The first use downloads about 90 MB once; after that it is cached. It runs on **computers only** (phone and tablet browsers don't allow enough memory, so they use the device voices) and speaks **English only**; other languages use the device voices or the API voices.
 
 You need **at least the Anthropic key** for the smart features. Without any keys the app still works in "basic mode": free device voices, dialogue/narration split, pitch changes for emotions and keyword-based ambience.
 

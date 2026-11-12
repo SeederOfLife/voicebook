@@ -2,7 +2,7 @@
 // fetches/prefetches speech, plays segments in order, remembers your place,
 // and drives the premium soundscape + sound effects.
 import { splitLongSegments, splitSentences } from "./chunk";
-import { BUILTIN_VOICES, BuiltinVoices } from "./builtin";
+import { BUILTIN_VOICES, BuiltinVoices, builtinSupported } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
 import { library, type BookRecord } from "./library";
 import { Soundscape } from "./soundscape";
@@ -158,7 +158,7 @@ export class ReaderEngine {
     const p: Provider[] = [];
     if (this.premium && this.config?.providers.elevenlabs) p.push("elevenlabs");
     if (this.premium && this.config?.providers.openai) p.push("openai");
-    if (typeof Worker !== "undefined" && typeof WebAssembly !== "undefined") p.push("builtin");
+    if (builtinSupported()) p.push("builtin");
     p.push("browser");
     return p;
   }
