@@ -4,7 +4,7 @@
 import { splitLongSegments, splitSentences } from "./chunk";
 import { BUILTIN_VOICES, BuiltinVoices, builtinCrashedLastTime, builtinNeedsOptIn, builtinOptedIn, builtinSupported, setBuiltinOptIn } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
-import { library, type BookRecord } from "./library";
+import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
 import type { Analysis, AppConfig, Chapter, Character, Provider, Scene, Segment, VoiceOption } from "./types";
 import { browserProsody, browserVoiceOptions, castVoices } from "./voices";
@@ -13,16 +13,17 @@ const MAX_SEGMENT = 600;
 const LOOKAHEAD_SEGMENTS = 10;
 const PREFETCH_AUDIO = 2;
 
-const ACCENT_LANG: Record<string, string> = {
-  American: "en-us", "Southern US": "en-us", British: "en-gb", Scottish: "en-gb", Irish: "en-ie",
-  Australian: "en-au", Indian: "en-in",
-};
-
 export interface Prefs {
   ambience: boolean;
   music: boolean;
   sfx: boolean;
   bgVolume: number;
+  /** Device voices: how strongly emotions change pitch, speed and volume (0 = flat, 1 = normal, 2 = dramatic) */
+  expressiveness: number;
+  /** Device voices: length of the pauses between lines (0 = none, 1 = normal, 2 = long) */
+  pauses: number;
+  /** Device voices: give characters a different pitch by gender and age */
+  characterPitch: boolean;
 }
 
 function silentWavUrl(): string {
@@ -91,7 +92,8 @@ export class ReaderEngine {
   password = "";
   accessToken = "";
   browserVoices: VoiceOption[] = [];
-  prefs: Prefs = { ambience: true, music: true, sfx: true, bgVolume: 0.6 };
+  prefs: Prefs = { ambience: true, music: true, sfx: true, bgVolume: 0.6, expressiveness: 1, pauses: 1, characterPitch: true };
+  tweaks: Record<string, VoiceTweak> = {};
   soundscape = new Soundscape();
   builtin: BuiltinVoices;
   notice: string | null = null;
@@ -226,6 +228,7 @@ export class ReaderEngine {
     this.meta = book.meta ?? { genre: "", language: "", narrationStyle: "" };
     this.castingByProvider = book.casting ?? {};
     this.accents = book.accents ?? {};
+    this.tweaks = book.tweaks ?? {};
     this.casting = this.castingByProvider[this.provider] ?? {};
     this.scenes.clear();
     this.aiUsed = false;
@@ -308,6 +311,7 @@ export class ReaderEngine {
       meta: this.meta,
       casting: this.castingByProvider,
       accents: this.accents,
+      tweaks: this.tweaks,
     });
   }
 
@@ -318,12 +322,40 @@ export class ReaderEngine {
     if (p === "elevenlabs") return this.config?.voices.elevenlabs ?? [];
     if (p === "builtin") return BUILTIN_VOICES;
     const lang = this.meta.language;
-    const matching = lang ? this.browserVoices.filter((v) => v.lang?.toLowerCase().startsWith(lang)) : [];
-    return matching.length ? matching : this.browserVoices;
+    const good = this.browserVoices.filter((v) => !v.fun);
+    const matching = lang ? good.filter((v) => v.lang?.toLowerCase().startsWith(lang)) : [];
+    return matching.length ? matching : good;
+  }
+
+  /** Voices for the picker, grouped. Device voices include every language, accent and the fun ones. */
+  voiceGroups(): { label: string; voices: VoiceOption[] }[] {
+    if (this.provider !== "browser") return [{ label: "", voices: this.voicesFor() }];
+    const best = this.voicesFor();
+    const ids = new Set(best.map((v) => v.id));
+    const other = this.browserVoices.filter((v) => !v.fun && !ids.has(v.id)).sort((a, b) => (a.lang ?? "").localeCompare(b.lang ?? ""));
+    const fun = this.browserVoices.filter((v) => v.fun);
+    return [
+      { label: this.meta.language ? `Best for this book (${this.meta.language.toUpperCase()})` : "Recommended", voices: best },
+      { label: "Other languages & accents", voices: other },
+      { label: "Fun & robotic", voices: fun },
+    ].filter((g) => g.voices.length);
+  }
+
+  setTweak(speaker: string, t: Partial<VoiceTweak>) {
+    const cur = this.tweaks[speaker] ?? { pitch: 1, speed: 1 };
+    this.tweaks = { ...this.tweaks, [speaker]: { ...cur, ...t } };
+    this.saveBookState();
+    this.onChange();
   }
 
   private recast() {
+    const chosen = this.casting;
     this.casting = castVoices(this.characters, this.voicesFor(), this.meta.genre || "other", this.casting);
+    if (this.provider === "browser") {
+      // Keep hand-picked device voices that are outside the recommended list.
+      const all = new Set(this.browserVoices.map((v) => v.id));
+      for (const [who, id] of Object.entries(chosen)) if (all.has(id)) this.casting[who] = id;
+    }
     this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
     for (const ch of this.characters) if (!(ch.name in this.accents)) this.accents[ch.name] = ch.accent ?? "";
   }
@@ -699,11 +731,18 @@ export class ReaderEngine {
     const synth = window.speechSynthesis;
     const voiceId = this.casting[seg.speaker] ?? this.casting.Narrator;
     const all = synth.getVoices();
-    let v = all.find((x) => x.voiceURI === voiceId);
-    const want = ACCENT_LANG[this.accents[seg.speaker] ?? ""];
-    if (want && this.premium && !v?.lang.toLowerCase().replace("_", "-").startsWith(want))
-      v = all.find((x) => x.lang.toLowerCase().replace("_", "-").startsWith(want)) ?? v;
-    const p = browserProsody(seg.emotion, seg.speaker === "Narrator" ? undefined : this.character(seg.speaker), seg.intensity ?? 1);
+    const v = all.find((x) => x.voiceURI === voiceId);
+    const p = browserProsody(
+      seg.emotion,
+      seg.speaker === "Narrator" || !this.prefs.characterPitch ? undefined : this.character(seg.speaker),
+      seg.intensity ?? 1,
+      this.prefs.expressiveness,
+    );
+    const tweak = this.tweaks[seg.speaker];
+    if (tweak) {
+      p.pitch = Math.min(2, Math.max(0.1, p.pitch * tweak.pitch));
+      p.rate = Math.min(2.5, Math.max(0.4, p.rate * tweak.speed));
+    }
     // Speak sentence by sentence: some browsers silently cut off long utterances (~15 s).
     const pieces = splitSentences(seg.text, 180);
     const speakPiece = (i: number) => {
@@ -737,7 +776,7 @@ export class ReaderEngine {
     if (/(…|\.\.\.)$/.test(seg.text)) ms = Math.max(ms, 520);
     if (next.chunk !== seg.chunk) ms = Math.max(ms, 600);
     if ((next.tags ?? []).some((t) => /pause/i.test(t))) ms += 400;
-    return ms / Math.max(0.75, this.rate);
+    return (ms * (this.provider === "browser" ? this.prefs.pauses : 1)) / Math.max(0.75, this.rate);
   }
 
   private neighbour(seg: Segment, dir: -1 | 1): string | undefined {

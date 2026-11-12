@@ -14,6 +14,13 @@ export interface BookRecord {
   meta?: { genre: string; language: string; narrationStyle: string };
   casting?: Partial<Record<Provider, Record<string, string>>>;
   accents?: Record<string, string>;
+  tweaks?: Record<string, VoiceTweak>;
+}
+
+/** Per-character fine tuning of a device voice (1 = unchanged). */
+export interface VoiceTweak {
+  pitch: number;
+  speed: number;
 }
 
 export type BookSummary = Pick<BookRecord, "id" | "title" | "openedAt" | "position" | "chapters"> & { total: number };

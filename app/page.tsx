@@ -262,6 +262,8 @@ export default function Home() {
   const current = e.segments[e.index];
   const progress = hasBook ? e.progress() : 0;
   const voices = e.voicesFor();
+  const voiceGroups = e.voiceGroups();
+  const deviceVoices = e.provider === "browser";
   const speakers = ["Narrator", ...e.characters.map((c) => c.name)];
   const chapterIdx = e.currentChapterIndex();
   const premium = e.premium;
@@ -471,6 +473,20 @@ export default function Home() {
                     <br />Then reopen the app. Voices marked ★ are the natural ones.
                   </p>
                 )}
+                {deviceVoices && voices.length > 0 && (
+                  <div className="device-opts">
+                    <label className="slider">Emotion strength <span className="muted small">{["flat", "gentle", "normal", "strong", "dramatic"][Math.round(e.prefs.expressiveness * 2)]}</span>
+                      <input type="range" min={0} max={2} step={0.5} value={e.prefs.expressiveness} onChange={(x) => e.setPrefs({ expressiveness: Number(x.target.value) })} />
+                    </label>
+                    <label className="slider">Pauses between lines <span className="muted small">{["none", "short", "normal", "long", "very long"][Math.round(e.prefs.pauses * 2)]}</span>
+                      <input type="range" min={0} max={2} step={0.5} value={e.prefs.pauses} onChange={(x) => e.setPrefs({ pauses: Number(x.target.value) })} />
+                    </label>
+                    <label className="toggle">
+                      <input type="checkbox" checked={e.prefs.characterPitch} onChange={(x) => e.setPrefs({ characterPitch: x.target.checked })} /> Different pitch per character
+                      <span className="muted small">Lower for men, higher for women and children. Turn off if voices sound unnatural.</span>
+                    </label>
+                  </div>
+                )}
                 {speakers.map((name) => {
                   const ch = e.character(name);
                   return (
@@ -489,14 +505,39 @@ export default function Home() {
                         >
                           {e.previewing === name ? <span className="spinner inline" /> : "▶"}
                         </button>
-                        <select value={e.casting[name] ?? ""} onChange={(x) => e.setVoice(name, x.target.value)} aria-label={`Voice for ${name}`}>
-                          {voices.map((v) => (
-                            <option key={v.id} value={v.id}>{v.name}{v.gender !== "neutral" ? ` (${v.gender[0].toUpperCase()})` : ""}</option>
-                          ))}
+                        <select
+                          className={deviceVoices ? "span2" : ""}
+                          value={e.casting[name] ?? ""}
+                          onChange={(x) => e.setVoice(name, x.target.value)}
+                          aria-label={`Voice for ${name}`}
+                        >
+                          {voiceGroups.map((g) => {
+                            const opts = g.voices.map((v) => (
+                              <option key={v.id} value={v.id}>{v.name}{v.gender !== "neutral" ? ` (${v.gender[0].toUpperCase()})` : ""}</option>
+                            ));
+                            return g.label ? <optgroup key={g.label} label={g.label}>{opts}</optgroup> : opts;
+                          })}
                         </select>
-                        <select value={e.accents[name] ?? ""} onChange={(x) => e.setAccent(name, x.target.value)} aria-label={`Accent for ${name}`}>
-                          {ACCENTS.map((a) => <option key={a} value={a}>{a ? `${premium ? "" : "🔒 "}${a} accent` : "Default accent"}</option>)}
-                        </select>
+                        {!deviceVoices && (
+                          <select value={e.accents[name] ?? ""} onChange={(x) => e.setAccent(name, x.target.value)} aria-label={`Accent for ${name}`}>
+                            {ACCENTS.map((a) => <option key={a} value={a}>{a ? `${premium ? "" : "🔒 "}${a} accent` : "Default accent"}</option>)}
+                          </select>
+                        )}
+                        {deviceVoices && (
+                          <div className="tweaks">
+                            <label>Pitch
+                              <input type="range" min={0.6} max={1.5} step={0.05} value={e.tweaks[name]?.pitch ?? 1}
+                                onChange={(x) => e.setTweak(name, { pitch: Number(x.target.value) })} aria-label={`Pitch for ${name}`} />
+                            </label>
+                            <label>Speed
+                              <input type="range" min={0.7} max={1.4} step={0.05} value={e.tweaks[name]?.speed ?? 1}
+                                onChange={(x) => e.setTweak(name, { speed: Number(x.target.value) })} aria-label={`Speed for ${name}`} />
+                            </label>
+                            {(e.tweaks[name]?.pitch ?? 1) !== 1 || (e.tweaks[name]?.speed ?? 1) !== 1 ? (
+                              <button className="link-btn" onClick={() => e.setTweak(name, { pitch: 1, speed: 1 })}>Reset</button>
+                            ) : null}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );

@@ -115,9 +115,9 @@ export function browserVoiceOptions(): VoiceOption[] {
   return window.speechSynthesis
     .getVoices()
     .map((v) => ({ v, q: voiceQuality(v) }))
-    .filter(({ q }) => q > -100)
     .sort((a, b) => b.q - a.q)
     .map(({ v, q }) => ({
+      fun: q <= -100,
       id: v.voiceURI,
       name: `${q >= 40 ? "★ " : ""}${v.name.replace(/\s*\(.*?\)\s*/g, " ").replace(/Microsoft |Google /, "").trim()} (${v.lang})`,
       lang: v.lang,
@@ -143,7 +143,7 @@ const EMOTION_PROSODY: Record<Emotion, { rate: number; pitch: number; volume: nu
 };
 
 /** Pitch/rate so characters sound different even with a single system voice. */
-export function browserProsody(emotion: Emotion, character?: Character, intensity = 1) {
+export function browserProsody(emotion: Emotion, character?: Character, intensity = 1, expressiveness = 1) {
   let pitch = 1;
   let rate = 1;
   if (character) {
@@ -160,7 +160,7 @@ export function browserProsody(emotion: Emotion, character?: Character, intensit
     pitch += ((hash(character.name) % 9) - 4) * 0.025; // small per-character offset
   }
   const e = EMOTION_PROSODY[emotion] ?? EMOTION_PROSODY.neutral;
-  const k = [0, 0.7, 1, 1.45][Math.min(3, Math.max(1, intensity))];
+  const k = [0, 0.7, 1, 1.45][Math.min(3, Math.max(1, intensity))] * expressiveness;
   const clamp = (n: number, a: number, b: number) => Math.min(b, Math.max(a, n));
   return {
     pitch: clamp(pitch + e.pitch * k, 0.1, 2),

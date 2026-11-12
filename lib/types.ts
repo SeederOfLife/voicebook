@@ -95,6 +95,8 @@ export interface VoiceOption {
   gender: Gender;
   lang?: string;
   useCase?: string;
+  /** Novelty / robotic device voice: never cast automatically, but can be picked by hand */
+  fun?: boolean;
 }
 
 export interface AppConfig {
