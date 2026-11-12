@@ -100,7 +100,7 @@ export function voiceQuality(v: SpeechSynthesisVoice): number {
   if (NOVELTY.test(n) || /espeak|eloquence|compact/i.test(n + v.voiceURI)) return -100;
   let q = 0;
   if (/natural|neural/i.test(n)) q += 60; // Microsoft Edge "… Online (Natural)"
-  if (/premium/i.test(n)) q += 55; // Apple premium (downloaded)
+  if (/premium/i.test(n)) q += 70; // Apple premium (downloaded): the best on iPhone/iPad/Mac
   if (/enhanced|siri/i.test(n)) q += 45; // Apple enhanced / Siri
   if (/online/i.test(n)) q += 20;
   if (/^google/i.test(n)) q += 30; // Chrome's Google voices

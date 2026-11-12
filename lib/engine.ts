@@ -24,7 +24,11 @@ export interface Prefs {
   pauses: number;
   /** Device voices: give characters a different pitch by gender and age */
   characterPitch: boolean;
+  /** Device voices: one voice reads everything (the most natural) */
+  singleVoice: boolean;
 }
+
+const PREFS_KEY = "vb:prefs2";
 
 function silentWavUrl(): string {
   const sr = 8000;
@@ -92,7 +96,7 @@ export class ReaderEngine {
   password = "";
   accessToken = "";
   browserVoices: VoiceOption[] = [];
-  prefs: Prefs = { ambience: true, music: true, sfx: true, bgVolume: 0.6, expressiveness: 1, pauses: 1, characterPitch: true };
+  prefs: Prefs = { ambience: true, music: true, sfx: true, bgVolume: 0.6, expressiveness: 0.5, pauses: 1, characterPitch: false, singleVoice: true };
   tweaks: Record<string, VoiceTweak> = {};
   soundscape = new Soundscape();
   builtin: BuiltinVoices;
@@ -120,7 +124,7 @@ export class ReaderEngine {
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;
     try {
-      this.prefs = { ...this.prefs, ...JSON.parse(store.get("vb:prefs") ?? "{}") };
+      this.prefs = { ...this.prefs, ...JSON.parse(store.get(PREFS_KEY) ?? "{}") };
     } catch {}
     this.soundscape.volume = this.prefs.bgVolume;
     if ("speechSynthesis" in window) {
@@ -209,7 +213,7 @@ export class ReaderEngine {
 
   setPrefs(p: Partial<Prefs>) {
     this.prefs = { ...this.prefs, ...p };
-    store.set("vb:prefs", JSON.stringify(this.prefs));
+    store.set(PREFS_KEY, JSON.stringify(this.prefs));
     this.soundscape.setVolume(this.prefs.bgVolume);
     this.applyScene();
     this.onChange();
@@ -258,6 +262,7 @@ export class ReaderEngine {
     this.gen++;
     this.token++;
     this.segments = [];
+    this.groupEnd = 0;
     this.index = 0;
     this.analyzedUpTo = Math.max(0, chunk) - 1;
     this.analyzePromise = null;
@@ -322,23 +327,24 @@ export class ReaderEngine {
     if (p === "elevenlabs") return this.config?.voices.elevenlabs ?? [];
     if (p === "builtin") return BUILTIN_VOICES;
     const lang = this.meta.language;
+    // Device voices: only the best-quality reading voices. English first; another
+    // language only when the book itself is in that language.
     const good = this.browserVoices.filter((v) => !v.fun);
-    const matching = lang ? good.filter((v) => v.lang?.toLowerCase().startsWith(lang)) : [];
-    return matching.length ? matching : good;
+    const inLang = (l: string) => good.filter((v) => v.lang?.toLowerCase().startsWith(l));
+    const pool = (lang && !lang.startsWith("en") && inLang(lang).length ? inLang(lang) : inLang("en")) || good;
+    const list = pool.length ? pool : good;
+    const top = list.filter((v) => v.name.startsWith("★"));
+    return top.length ? top : list.slice(0, 4);
+  }
+
+  /** True when one device voice reads the whole book. */
+  get oneVoice() {
+    return this.provider === "browser" && this.prefs.singleVoice;
   }
 
   /** Voices for the picker, grouped. Device voices include every language, accent and the fun ones. */
   voiceGroups(): { label: string; voices: VoiceOption[] }[] {
-    if (this.provider !== "browser") return [{ label: "", voices: this.voicesFor() }];
-    const best = this.voicesFor();
-    const ids = new Set(best.map((v) => v.id));
-    const other = this.browserVoices.filter((v) => !v.fun && !ids.has(v.id)).sort((a, b) => (a.lang ?? "").localeCompare(b.lang ?? ""));
-    const fun = this.browserVoices.filter((v) => v.fun);
-    return [
-      { label: this.meta.language ? `Best for this book (${this.meta.language.toUpperCase()})` : "Recommended", voices: best },
-      { label: "Other languages & accents", voices: other },
-      { label: "Fun & robotic", voices: fun },
-    ].filter((g) => g.voices.length);
+    return [{ label: "", voices: this.voicesFor() }];
   }
 
   setTweak(speaker: string, t: Partial<VoiceTweak>) {
@@ -349,13 +355,7 @@ export class ReaderEngine {
   }
 
   private recast() {
-    const chosen = this.casting;
     this.casting = castVoices(this.characters, this.voicesFor(), this.meta.genre || "other", this.casting);
-    if (this.provider === "browser") {
-      // Keep hand-picked device voices that are outside the recommended list.
-      const all = new Set(this.browserVoices.map((v) => v.id));
-      for (const [who, id] of Object.entries(chosen)) if (all.has(id)) this.casting[who] = id;
-    }
     this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
     for (const ch of this.characters) if (!(ch.name in this.accents)) this.accents[ch.name] = ch.accent ?? "";
   }
@@ -500,6 +500,7 @@ export class ReaderEngine {
   }
 
   jump(i: number) {
+    this.groupEnd = 0;
     this.index = Math.max(0, Math.min(i, Math.max(0, this.segments.length - 1)));
     this.loadedKey = "";
     if (this.playing) this.playCurrent();
@@ -688,11 +689,17 @@ export class ReaderEngine {
 
     if (this.provider === "browser") {
       this.buffering = false;
+      this.groupEnd = this.oneVoice ? this.flowEnd(this.index) : this.index;
       this.onChange();
       this.playSfx(seg, t);
-      this.speakBrowser(seg, t);
+      if (this.groupEnd > this.index) {
+        // One voice: read narration and dialogue together in one breath, like a person would.
+        const group = this.segments.slice(this.index, this.groupEnd + 1);
+        this.speakBrowser({ ...seg, text: group.map((s) => s.text).join(" "), emotion: "neutral", intensity: 1 }, t);
+      } else this.speakBrowser(seg, t);
       return;
     }
+    this.groupEnd = this.index;
 
     this.buffering = true;
     this.onChange();
@@ -729,22 +736,25 @@ export class ReaderEngine {
 
   private speakBrowser(seg: Segment, t: number, onEnd: () => void = () => this.advance()) {
     const synth = window.speechSynthesis;
-    const voiceId = this.casting[seg.speaker] ?? this.casting.Narrator;
+    const who = this.oneVoice ? "Narrator" : seg.speaker;
+    const voiceId = this.casting[who] ?? this.casting.Narrator;
     const all = synth.getVoices();
     const v = all.find((x) => x.voiceURI === voiceId);
     const p = browserProsody(
       seg.emotion,
-      seg.speaker === "Narrator" || !this.prefs.characterPitch ? undefined : this.character(seg.speaker),
+      who === "Narrator" || !this.prefs.characterPitch ? undefined : this.character(seg.speaker),
       seg.intensity ?? 1,
       this.prefs.expressiveness,
     );
-    const tweak = this.tweaks[seg.speaker];
+    const tweak = this.tweaks[who];
     if (tweak) {
       p.pitch = Math.min(2, Math.max(0.1, p.pitch * tweak.pitch));
       p.rate = Math.min(2.5, Math.max(0.4, p.rate * tweak.speed));
     }
     // Speak sentence by sentence: some browsers silently cut off long utterances (~15 s).
-    const pieces = splitSentences(seg.text, 180);
+    // Voices stored on the device read a whole passage in one breath, which sounds most natural.
+    // Only online voices need sentence-sized pieces (some browsers cut them off after ~15 s).
+    const pieces = v && v.localService === false ? splitSentences(seg.text, 180) : [seg.text];
     const speakPiece = (i: number) => {
       if (t !== this.token) return;
       if (i >= pieces.length) return onEnd();
@@ -784,8 +794,28 @@ export class ReaderEngine {
     return i < 0 ? undefined : this.segments[i + dir]?.text;
   }
 
+  /** Last line read together with the current one (one-voice mode). */
+  groupEnd = 0;
+
+  private isHeading(s: Segment) {
+    return /heading/i.test(s.delivery ?? "") || (s.text.length < 80 && !/[.!?…"”»,;:]$/.test(s.text.trim()));
+  }
+
+  private flowEnd(i: number): number {
+    const first = this.segments[i];
+    if (this.isHeading(first)) return i;
+    let len = first.text.length;
+    let j = i;
+    for (let n = this.segments[j + 1]; n && n.chunk === first.chunk && !this.isHeading(n) && len + n.text.length <= 450; n = this.segments[j + 1]) {
+      len += n.text.length + 1;
+      j++;
+    }
+    return j;
+  }
+
   private advance() {
-    const seg = this.segments[this.index];
+    const seg = this.segments[Math.max(this.index, this.groupEnd)];
+    this.index = Math.max(this.index, this.groupEnd);
     this.index++;
     this.loadedKey = "";
     if (!this.playing) return this.onChange();

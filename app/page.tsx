@@ -264,7 +264,7 @@ export default function Home() {
   const voices = e.voicesFor();
   const voiceGroups = e.voiceGroups();
   const deviceVoices = e.provider === "browser";
-  const speakers = ["Narrator", ...e.characters.map((c) => c.name)];
+  const speakers = e.oneVoice ? ["Narrator"] : ["Narrator", ...e.characters.map((c) => c.name)];
   const chapterIdx = e.currentChapterIndex();
   const premium = e.premium;
   const showUpgrade = e.premiumPrompt;
@@ -444,7 +444,7 @@ export default function Home() {
                 )}
                 {!e.aiUsed && e.aiUnavailable && <span className="chip warn">Basic mode (no AI analysis)</span>}
                 <button className={`chip link ${panel === "cast" ? "on" : ""}`} onClick={() => setPanel((p) => (p === "cast" ? "none" : "cast"))}>
-                  🎭 Voices ({e.characters.length + 1})
+                  🎭 {e.oneVoice ? "Voice" : `Voices (${e.characters.length + 1})`}
                 </button>
                 <button className={`chip link ${panel === "sound" ? "on" : ""}`} onClick={() => setPanel((p) => (p === "sound" ? "none" : "sound"))}>
                   🎵 Sound {premium ? "" : "🔒"}
@@ -466,25 +466,29 @@ export default function Home() {
                 {voices.length === 0 && <p className="muted small">No voices available for this engine on this device.</p>}
                 {e.provider === "browser" && voices.length > 0 && !voices.some((v) => v.name.startsWith("★")) && (
                   <p className="tip small">
-                    💡 Your device only has basic voices. For much more natural free voices:
-                    <br />• <strong>iPhone/iPad:</strong> Settings → Accessibility → Spoken Content → Voices → pick your language → download an <em>Enhanced</em> or <em>Premium</em> voice.
-                    <br />• <strong>Android:</strong> Settings → Speech → Text-to-speech → Google → install voice data.
-                    <br />• <strong>Computer:</strong> use Microsoft Edge (its “Natural” voices are excellent) or Chrome.
-                    <br />Then reopen the app. Voices marked ★ are the natural ones.
+                    💡 This device only has its basic voices, which sound flat. The natural ones are a free download:
+                    <br />• <strong>iPhone/iPad:</strong> Settings → Accessibility → Spoken Content → Voices → English → choose <strong>Ava</strong>, <strong>Zoe</strong> or <strong>Evan</strong> → download the <em>Premium</em> version (or <em>Enhanced</em>).
+                    <br />• <strong>Android:</strong> Settings → Text-to-speech → Google → install the English voice data.
+                    <br />• <strong>Computer:</strong> open the app in Microsoft Edge, whose “Natural” voices are the best free ones.
+                    <br />Then close and reopen the app. Once a ★ voice is installed, only ★ voices are listed here.
                   </p>
                 )}
                 {deviceVoices && voices.length > 0 && (
                   <div className="device-opts">
+                    <label className="toggle">
+                      <input type="checkbox" checked={e.prefs.singleVoice} onChange={(x) => e.setPrefs({ singleVoice: x.target.checked })} /> One voice reads everything
+                      <span className="muted small">The most natural. Turn off to give each character their own voice.</span>
+                    </label>
                     <label className="slider">Emotion strength <span className="muted small">{["flat", "gentle", "normal", "strong", "dramatic"][Math.round(e.prefs.expressiveness * 2)]}</span>
                       <input type="range" min={0} max={2} step={0.5} value={e.prefs.expressiveness} onChange={(x) => e.setPrefs({ expressiveness: Number(x.target.value) })} />
                     </label>
                     <label className="slider">Pauses between lines <span className="muted small">{["none", "short", "normal", "long", "very long"][Math.round(e.prefs.pauses * 2)]}</span>
                       <input type="range" min={0} max={2} step={0.5} value={e.prefs.pauses} onChange={(x) => e.setPrefs({ pauses: Number(x.target.value) })} />
                     </label>
-                    <label className="toggle">
+                    {!e.prefs.singleVoice && <label className="toggle">
                       <input type="checkbox" checked={e.prefs.characterPitch} onChange={(x) => e.setPrefs({ characterPitch: x.target.checked })} /> Different pitch per character
                       <span className="muted small">Lower for men, higher for women and children. Turn off if voices sound unnatural.</span>
-                    </label>
+                    </label>}
                   </div>
                 )}
                 {speakers.map((name) => {
@@ -493,7 +497,7 @@ export default function Home() {
                     <div key={name} className="cast-row">
                       <span className="dot" style={{ background: speakerColor(name) }} />
                       <span className="cast-name">
-                        {name}
+                        {e.oneVoice ? "Reading voice" : name}
                         {ch && <small className="muted"> {ch.gender !== "neutral" ? ch.gender : ""} {ch.age !== "adult" ? ch.age : ""} {ch.traits ? `· ${ch.traits}` : ""}</small>}
                       </span>
                       <div className="cast-selects">
@@ -576,12 +580,12 @@ export default function Home() {
                 const prev = e.segments[i - 1];
                 const chapterStart = e.chapters.find((c) => c.chunk === s.chunk);
                 const newPart = (i === 0 || prev.chunk !== s.chunk) && chapterStart && !s.text.startsWith(chapterStart.title.split(" — ")[0]);
-                const active = i === e.index;
+                const active = i === e.index || (e.playing && i > e.index && i <= e.groupEnd);
                 return (
                   <span key={s.id}>
                     {newPart && <span className="part-break" aria-hidden>{chapterStart.title}</span>}
                     <span
-                      ref={active ? activeRef : undefined}
+                      ref={i === e.index ? activeRef : undefined}
                       className={`seg ${active ? "active" : ""} ${s.speaker !== "Narrator" ? "dialogue" : ""}`}
                       style={s.speaker !== "Narrator" ? { ["--c" as string]: speakerColor(s.speaker) } : undefined}
                       onClick={() => e.jump(i)}
