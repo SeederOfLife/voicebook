@@ -247,3 +247,17 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .tweaks input { flex: 1; min-width: 60px; padding: 0; accent-color: var(--accent); }
 .device-opts { display: grid; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
 .slider span { margin-left: 6px; }
+
+/* ---------- studio voice ---------- */
+.studio-info { display: grid; gap: 8px; padding-bottom: 14px; border-bottom: 1px solid var(--line); line-height: 1.5; }
+.studio-info p { margin: 0; }
+.studio-info strong { color: var(--accent); }
+.meter { height: 6px; background: var(--line); border-radius: 6px; overflow: hidden; }
+.meter span { display: block; height: 100%; background: var(--accent); border-radius: 6px; }
+.choice { display: grid; gap: 6px; }
+.choice select { background: var(--bg-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; }
+.para-break { display: block; height: 0.9em; }
+.now .dl { display: inline-block; max-width: 100%; }
+
+.seg.heading { display: block; font-size: 1.25em; line-height: 1.35; margin: 1.1em 0 0.5em; color: var(--ink); }
+.seg.heading:first-child { margin-top: 0.2em; }

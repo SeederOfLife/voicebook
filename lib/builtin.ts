@@ -1,85 +1,18 @@
-// Built-in AI voices (Kokoro) running in a Web Worker inside the browser.
+// The studio voice generated inside the browser (a Web Worker running the Kokoro
+// model). Used on computers when the server's studio voice isn't available.
+// Phones and tablets don't have the memory for it, so it is never used there.
 import type { VoiceOption } from "./types";
+import { STUDIO_VOICES } from "./voices";
 
-export const BUILTIN_VOICES: VoiceOption[] = [
-  { id: "bm_george", name: "George · British", gender: "male", useCase: "narration" },
-  { id: "af_heart", name: "Heart · American", gender: "female", useCase: "narration" },
-  { id: "am_michael", name: "Michael · American", gender: "male" },
-  { id: "bf_emma", name: "Emma · British", gender: "female" },
-  { id: "am_fenrir", name: "Fenrir · American", gender: "male" },
-  { id: "af_bella", name: "Bella · American", gender: "female" },
-  { id: "bm_fable", name: "Fable · British", gender: "male" },
-  { id: "af_nicole", name: "Nicole · American (soft)", gender: "female" },
-  { id: "am_puck", name: "Puck · American", gender: "male" },
-  { id: "bf_isabella", name: "Isabella · British", gender: "female" },
-  { id: "bm_lewis", name: "Lewis · British", gender: "male" },
-  { id: "af_sarah", name: "Sarah · American", gender: "female" },
-  { id: "am_adam", name: "Adam · American", gender: "male" },
-  { id: "af_aoede", name: "Aoede · American", gender: "female" },
-  { id: "bm_daniel", name: "Daniel · British", gender: "male" },
-  { id: "bf_lily", name: "Lily · British", gender: "female" },
-  { id: "am_eric", name: "Eric · American", gender: "male" },
-  { id: "af_kore", name: "Kore · American", gender: "female" },
-  { id: "am_liam", name: "Liam · American", gender: "male" },
-  { id: "af_nova", name: "Nova · American", gender: "female" },
-  { id: "am_onyx", name: "Onyx · American", gender: "male" },
-  { id: "bf_alice", name: "Alice · British", gender: "female" },
-  { id: "am_echo", name: "Echo · American", gender: "male" },
-  { id: "af_sky", name: "Sky · American", gender: "female" },
-  { id: "af_river", name: "River · American", gender: "female" },
-  { id: "af_jessica", name: "Jessica · American", gender: "female" },
-  { id: "af_alloy", name: "Alloy · American", gender: "female" },
-];
-
-/**
- * The voice pack needs a few hundred MB of memory. Phone and tablet browsers kill the
- * tab when it loads (seen on iPhone), so it is only offered on computers.
- */
-const OPT_IN = "vb:builtin-optin";
-const PENDING = "vb:builtin-pending";
-const ls = {
-  get: (k: string) => {
-    try {
-      return localStorage.getItem(k);
-    } catch {
-      return null;
-    }
-  },
-  set: (k: string, v: string | null) => {
-    try {
-      v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v);
-    } catch {}
-  },
-};
-
-const canRun = () => typeof window !== "undefined" && typeof Worker !== "undefined" && typeof WebAssembly !== "undefined";
-
-/** Phones, tablets and low-memory devices: the pack is off unless the person switches it on. */
-export function builtinNeedsOptIn(): boolean {
-  if (!canRun()) return false;
-  const ua = navigator.userAgent;
-  const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
-  return mobile || ((navigator as any).deviceMemory ?? 8) < 4;
-}
-
-export const builtinOptedIn = () => ls.get(OPT_IN) === "1";
-export function setBuiltinOptIn(on: boolean) {
-  ls.set(OPT_IN, on ? "1" : null);
-  if (!on) ls.set(PENDING, null);
-}
-
-/**
- * If the browser killed the tab while the pack was working last time, switch it back
- * off so the app can't get stuck in a crash loop. Returns true when that happened.
- */
-export function builtinCrashedLastTime(): boolean {
-  if (!builtinNeedsOptIn() || ls.get(PENDING) !== "1") return false;
-  setBuiltinOptIn(false);
-  return true;
-}
+/** Same voices as the server's studio voice, so switching between the two is seamless. */
+export const BUILTIN_VOICES: VoiceOption[] = STUDIO_VOICES;
 
 export function builtinSupported(): boolean {
-  return canRun() && (!builtinNeedsOptIn() || builtinOptedIn());
+  if (typeof window === "undefined" || typeof Worker === "undefined" || typeof WebAssembly === "undefined") return false;
+  const ua = navigator.userAgent;
+  const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1);
+  const lowMemory = ((navigator as { deviceMemory?: number }).deviceMemory ?? 8) < 4;
+  return !mobile && !lowMemory;
 }
 
 export class BuiltinVoices {
@@ -87,7 +20,7 @@ export class BuiltinVoices {
   progress: number | null = null;
   ready = false;
   private worker: Worker | null = null;
-  private pending = new Map<number, { resolve: (url: string) => void; reject: (e: Error) => void }>();
+  private pending = new Map<number, { resolve: (audio: Blob) => void; reject: (e: Error) => void }>();
   private seq = 0;
 
   constructor(private onChange: () => void) {}
@@ -110,15 +43,13 @@ export class BuiltinVoices {
       const p = this.pending.get(m.id);
       if (!p) return;
       this.pending.delete(m.id);
-      if (!this.pending.size) ls.set(PENDING, null);
-      if (m.error) p.reject(new Error(`Built-in voice failed: ${m.error}`));
-      else p.resolve(URL.createObjectURL(new Blob([m.buffer], { type: "audio/wav" })));
+      if (m.error) p.reject(new Error(`could not generate the voice on this computer: ${m.error}`));
+      else p.resolve(new Blob([m.buffer], { type: "audio/wav" }));
     };
     w.onerror = () => {
-      const err = new Error("Built-in voices couldn't load on this device. Try the device voices instead.");
+      const err = new Error("the voice could not load on this computer");
       this.pending.forEach((p) => p.reject(err));
       this.pending.clear();
-      ls.set(PENDING, null);
       this.worker = null;
       this.progress = null;
       this.onChange();
@@ -127,27 +58,15 @@ export class BuiltinVoices {
     return w;
   }
 
-  /** Start downloading the voice pack in the background (not on phones: only when actually used). */
+  /** Start downloading the voice pack in the background. */
   warm() {
-    if (builtinNeedsOptIn()) return;
     this.start().postMessage({ type: "load" });
   }
 
-  stop() {
-    this.worker?.terminate();
-    this.worker = null;
-    this.pending.forEach((p) => p.reject(new Error("Built-in voices turned off")));
-    this.pending.clear();
-    this.progress = null;
-    this.ready = false;
-    ls.set(PENDING, null);
-  }
-
-  generate(text: string, voice: string, speed: number): Promise<string> {
+  generate(text: string, voice: string, speed: number): Promise<Blob> {
     const id = ++this.seq;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      if (builtinNeedsOptIn()) ls.set(PENDING, "1");
       this.start().postMessage({ id, text, voice, speed });
     });
   }

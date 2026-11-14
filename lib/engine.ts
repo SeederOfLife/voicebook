@@ -1,38 +1,135 @@
-// The reading engine: analyses the book part by part, casts voices,
-// fetches/prefetches speech, plays segments in order, remembers your place,
-// and drives the premium soundscape + sound effects.
-import { splitLongSegments, splitSentences } from "./chunk";
-import { BUILTIN_VOICES, BuiltinVoices, builtinCrashedLastTime, builtinNeedsOptIn, builtinOptedIn, builtinSupported, setBuiltinOptIn } from "./builtin";
+// The reading engine: analyses the book part by part, groups lines into passages,
+// gets each passage spoken (studio voice, acting voices or the device's own voice),
+// keeps the generated audio on the device, remembers your place, and drives the
+// background sound.
+import { splitSentences } from "./chunk";
+import { BUILTIN_VOICES, BuiltinVoices, builtinSupported } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
 import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
-import type { Analysis, AppConfig, Chapter, Character, Provider, Scene, Segment, VoiceOption } from "./types";
-import { browserProsody, browserVoiceOptions, castVoices } from "./voices";
+import type { Analysis, AppConfig, Chapter, Character, Emotion, Mood, Provider, RawSegment, Scene, Segment, VoiceOption } from "./types";
+import { browserProsody, browserVoiceOptions, castVoices, STUDIO_VOICES } from "./voices";
 
-const MAX_SEGMENT = 600;
-const LOOKAHEAD_SEGMENTS = 10;
-const PREFETCH_AUDIO = 2;
+/** Longest single line, in characters (longer ones are cut at sentence ends). */
+const MAX_SEGMENT = 240;
+/**
+ * The first passages of each part of the book are shorter, so listening can begin
+ * sooner while the following, full-length passages are being prepared.
+ */
+const RAMP = [170, 280];
+/** Analyse the next part of the book when fewer than this many lines are left. */
+const LOOKAHEAD_SEGMENTS = 14;
+/** How many passages to get ready beyond the one being read. */
+const AHEAD: Record<Provider, number> = { studio: 2, builtin: 1, elevenlabs: 2, openai: 2, browser: 0 };
+/**
+ * Longest passage read in one go, in characters. Engines that read neutrally get whole
+ * passages (more natural flow); acting engines get one line at a time (0), because each
+ * line carries its own emotion.
+ */
+const PASSAGE_CHARS: Record<Provider, number> = { studio: 380, builtin: 300, browser: 450, elevenlabs: 0, openai: 0 };
+
+/** After a failure, wait this long before asking the server for the studio voice again. */
+const RETRY_MS = 120_000;
+
+const ENGINE_KEY = "vb:engine";
+const PREFS_KEY = "vb:prefs3";
+const USAGE_KEY = "vb:studio-usage";
 
 export interface Prefs {
   ambience: boolean;
-  music: boolean;
+  /** Background music: never, at key moments only, or all the time */
+  music: "off" | "moments" | "always";
   sfx: boolean;
   bgVolume: number;
-  /** Device voices: how strongly emotions change pitch, speed and volume (0 = flat, 1 = normal, 2 = dramatic) */
-  expressiveness: number;
-  /** Device voices: length of the pauses between lines (0 = none, 1 = normal, 2 = long) */
-  pauses: number;
-  /** Device voices: give characters a different pitch by gender and age */
-  characterPitch: boolean;
-  /** Device voices: one voice reads everything (the most natural) */
+  /** One voice reads everything (the most natural); off = each character gets a voice */
   singleVoice: boolean;
+  /** Device voice: how strongly emotions change pitch, speed and volume (0 = flat … 2 = dramatic) */
+  expressiveness: number;
+  /** Device voice: length of the pauses between passages (0 = none, 1 = normal, 2 = long) */
+  pauses: number;
+  /** Device voice: give characters a different pitch by gender and age */
+  characterPitch: boolean;
 }
 
-const PREFS_KEY = "vb:prefs2";
+const DEFAULT_PREFS: Prefs = {
+  ambience: true,
+  music: "moments",
+  sfx: true,
+  bgVolume: 0.45,
+  singleVoice: true,
+  expressiveness: 0.5,
+  pauses: 1,
+  characterPitch: false,
+};
 
-function silentWavUrl(): string {
+/** What a device has asked of the server's studio voice this month. */
+interface Usage {
+  month: string;
+  /** server computing time, seconds */
+  cpu: number;
+  /** audio generated, seconds */
+  audio: number;
+}
+
+/** A stretch of the book spoken in one go by one voice. */
+export interface Passage {
+  /** first and last line (indexes into `segments`) */
+  start: number;
+  end: number;
+  /** whose voice reads it ("Narrator" when one voice reads everything) */
+  speaker: string;
+  voice: string;
+  text: string;
+  /** silence after it, in milliseconds */
+  tailMs: number;
+  /** identifies the audio of this passage (voice + words), for saving and reuse */
+  key: string;
+  /** the first line (emotion, acting directions) */
+  seg: Segment;
+}
+
+class VoiceError extends Error {
+  constructor(
+    public kind: "limit" | "offline" | "server" | "stale",
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+const MOOD_FOR: Partial<Record<Emotion, Mood>> = {
+  angry: "tense",
+  fearful: "tense",
+  sad: "sad",
+  tender: "warm",
+  happy: "happy",
+  excited: "epic",
+  surprised: "tense",
+  mysterious: "mysterious",
+  whisper: "mysterious",
+  serious: "tense",
+};
+
+const monthKey = () => new Date().toISOString().slice(0, 7);
+
+/** 53-bit string hash (cyrb53), as text. */
+function hash53(str: string): string {
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+
+/** A few seconds of silence, looped while waiting so a phone keeps the audio session alive. */
+function silentWavUrl(seconds: number): string {
   const sr = 8000;
-  const n = 400;
+  const n = Math.round(sr * seconds);
   const buf = new ArrayBuffer(44 + n * 2);
   const v = new DataView(buf);
   const w = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
@@ -50,6 +147,36 @@ function silentWavUrl(): string {
   w(36, "data");
   v.setUint32(40, n * 2, true);
   return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+}
+
+function timeoutSignal(ms: number): AbortSignal {
+  const c = new AbortController();
+  setTimeout(() => c.abort(), ms);
+  return c.signal;
+}
+
+/** Work out which lines start a new paragraph by finding them in the book's text. */
+function markParagraphs(segs: RawSegment[], source: string) {
+  const text = source
+    .replace(/\r/g, "")
+    .replace(/\n[ \t]*\n\s*/g, "\u0001")
+    .replace(/\s+/g, " ")
+    .replace(/ ?\u0001 ?/g, "\n");
+  let cursor = 0;
+  let reach = 80;
+  for (const s of segs) {
+    const flat = s.text.replace(/\s+/g, " ").trim();
+    const probe = flat.slice(0, 28);
+    if (!probe) continue;
+    const at = text.indexOf(probe, cursor);
+    if (at < 0 || at - cursor > reach) {
+      reach += flat.length + 4; // not where expected (the text was repaired): leave it unmarked
+      continue;
+    }
+    s.para = at === 0 || /\n["“«„'‘(\[]*$/.test(text.slice(Math.max(0, at - 4), at));
+    cursor = at + probe.length;
+    reach = flat.length + 80;
+  }
 }
 
 const store = {
@@ -80,51 +207,74 @@ export class ReaderEngine {
   aiUsed = false;
   aiUnavailable = false;
 
+  /** First line of the passage being read (or about to be). */
   index = 0;
+  /** Last line of that passage. */
+  groupEnd = 0;
   playing = false;
   buffering = false;
   analyzing = false;
+  /** When the current wait for audio began (ms), for the "preparing…" display. */
+  waitingSince = 0;
   rate = 1;
   provider: Provider = "browser";
   casting: Record<string, string> = {};
   castingByProvider: Partial<Record<Provider, Record<string, string>>> = {};
   accents: Record<string, string> = {};
+  tweaks: Record<string, VoiceTweak> = {};
   error: string | null = null;
+  notice: string | null = null;
   premiumPrompt = false;
 
   config: AppConfig | null = null;
   password = "";
   accessToken = "";
   browserVoices: VoiceOption[] = [];
-  prefs: Prefs = { ambience: true, music: true, sfx: true, bgVolume: 0.6, expressiveness: 0.5, pauses: 1, characterPitch: false, singleVoice: true };
-  tweaks: Record<string, VoiceTweak> = {};
+  prefs: Prefs = { ...DEFAULT_PREFS };
   soundscape = new Soundscape();
   builtin: BuiltinVoices;
-  notice: string | null = null;
+  /** The server's studio voice has produced audio during this visit. */
+  studioReady = false;
+  /** Passages of the open book whose audio is saved on this device. */
+  savedPassages = 0;
+  previewing = "";
 
+  private usage: Usage = { month: monthKey(), cpu: 0, audio: 0 };
   private audio: HTMLAudioElement;
   private cache = new Map<string, Promise<string>>();
   private sfxCache = new Map<string, Promise<string>>();
   private token = 0;
   private gen = 0;
+  /** Changes whenever the listener moves elsewhere; queued look-ahead work from before is dropped. */
+  private epoch = 0;
   private analyzePromise: Promise<void> | null = null;
   private pendingOffset: number | null = null;
+  private justOpened = false;
   private loadedKey = "";
   private unlocked = false;
   private silent = "";
+  private storageFull = false;
+  private lastMusic: { chunk: number; mood: Mood } | null = null;
+  /** Set while the server's studio voice can't deliver (and why), so it isn't asked again at once. */
+  private studioDown: { kind: VoiceError["kind"]; why: string; since: number } | null = null;
+  /** The engine that produced the passage now playing (a stand-in may differ from the chosen one). */
+  private spokenBy: Provider = "browser";
+  private studioActive = 0;
+  private studioQueue: (() => void)[] = [];
+  private utterance: SpeechSynthesisUtterance | null = null;
 
   constructor(private onChange: () => void) {
     this.audio = new Audio();
     this.audio.preload = "auto";
     this.builtin = new BuiltinVoices(onChange);
-    if (builtinCrashedLastTime()) {
-      if (store.get("vb:provider") === "builtin") store.set("vb:provider", "browser");
-      this.notice = "The built-in AI voices needed more memory than this browser allows and it closed the page, so they've been switched off. Your device's voices are reading instead.";
-    }
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;
     try {
-      this.prefs = { ...this.prefs, ...JSON.parse(store.get(PREFS_KEY) ?? "{}") };
+      this.prefs = { ...DEFAULT_PREFS, ...JSON.parse(store.get(PREFS_KEY) ?? "{}") };
+    } catch {}
+    try {
+      const u = JSON.parse(store.get(USAGE_KEY) ?? "null");
+      if (u && u.month === monthKey()) this.usage = { month: u.month, cpu: Number(u.cpu) || 0, audio: Number(u.audio) || 0 };
     } catch {}
     this.soundscape.volume = this.prefs.bgVolume;
     if ("speechSynthesis" in window) {
@@ -139,8 +289,8 @@ export class ReaderEngine {
     if ("mediaSession" in navigator) {
       navigator.mediaSession.setActionHandler("play", () => this.play());
       navigator.mediaSession.setActionHandler("pause", () => this.pause());
-      navigator.mediaSession.setActionHandler("nexttrack", () => this.jump(this.index + 1));
-      navigator.mediaSession.setActionHandler("previoustrack", () => this.jump(Math.max(0, this.index - 1)));
+      navigator.mediaSession.setActionHandler("nexttrack", () => this.next());
+      navigator.mediaSession.setActionHandler("previoustrack", () => this.previous());
     }
     window.addEventListener("pagehide", () => this.savePosition());
   }
@@ -153,21 +303,26 @@ export class ReaderEngine {
 
   setConfig(c: AppConfig) {
     this.config = c;
-    const saved = store.get("vb:provider") as Provider | null;
+    // Without an AI key there is nothing to ask: split dialogue and narration locally.
+    this.aiUnavailable = !c.providers.anthropic;
+    const saved = store.get(ENGINE_KEY) as Provider | null;
     const available = this.availableProviders();
-    const prev = this.provider;
-    this.provider = saved && available.includes(saved) ? saved : available[0];
+    const next = saved && available.includes(saved) ? saved : available[0];
+    if (next !== this.provider) {
+      this.provider = next;
+      this.casting = this.castingByProvider[next] ?? {};
+    }
     if (!this.premium) this.soundscape.stop();
-    if (prev !== this.provider) this.casting = this.castingByProvider[this.provider] ?? {};
     this.recast();
     this.onChange();
   }
 
-  /** Engines this account can use right now. */
+  /** Engines this visitor can choose, best first. */
   availableProviders(): Provider[] {
     const p: Provider[] = [];
     if (this.premium && this.config?.providers.elevenlabs) p.push("elevenlabs");
     if (this.premium && this.config?.providers.openai) p.push("openai");
+    if (this.config?.providers.studio) p.push("studio");
     if (builtinSupported()) p.push("builtin");
     p.push("browser");
     return p;
@@ -180,23 +335,6 @@ export class ReaderEngine {
     if (this.config.providers.elevenlabs) p.push("elevenlabs");
     if (this.config.providers.openai) p.push("openai");
     return p;
-  }
-
-  /** On phones the built-in AI voices are an opt-in switch (they can run out of memory). */
-  get builtinIsOptional() {
-    return builtinNeedsOptIn();
-  }
-  get builtinOn() {
-    return builtinOptedIn();
-  }
-  setBuiltin(on: boolean) {
-    setBuiltinOptIn(on);
-    if (on) this.setProvider("builtin");
-    else {
-      this.builtin.stop();
-      if (this.provider === "builtin") this.setProvider("browser");
-    }
-    this.onChange();
   }
 
   setPassword(pw: string) {
@@ -212,11 +350,54 @@ export class ReaderEngine {
   }
 
   setPrefs(p: Partial<Prefs>) {
+    const regroup = p.singleVoice !== undefined && p.singleVoice !== this.prefs.singleVoice;
     this.prefs = { ...this.prefs, ...p };
     store.set(PREFS_KEY, JSON.stringify(this.prefs));
     this.soundscape.setVolume(this.prefs.bgVolume);
-    this.applyScene();
+    if (p.music !== undefined && p.music !== "always") this.soundscape.setMusic("none");
+    if (regroup) {
+      // Passages are grouped differently now: start the current one again.
+      this.loadedKey = "";
+      this.snap(this.index);
+      if (this.playing) return void this.playCurrent();
+    } else if (this.playing) {
+      const now = this.passageAt(this.index);
+      if (now) this.applySound(now, false);
+    }
     this.onChange();
+  }
+
+  // ---------- studio voice allowance ----------
+
+  private monthUsage(): Usage {
+    if (this.usage.month !== monthKey()) this.usage = { month: monthKey(), cpu: 0, audio: 0 };
+    return this.usage;
+  }
+
+  /** Server time this device may use per month, in seconds (0 = no limit). */
+  get studioLimit(): number {
+    return Math.max(0, (this.config?.studioMonthlyHours ?? 3) * 3600);
+  }
+
+  get studioUsedUp(): boolean {
+    return this.studioLimit > 0 && this.monthUsage().cpu >= this.studioLimit;
+  }
+
+  /** For the interface: what this device has used of the monthly studio-voice allowance. */
+  studioUsage(): { audioMinutes: number; fraction: number; limited: boolean } {
+    const u = this.monthUsage();
+    return {
+      audioMinutes: Math.round(u.audio / 60),
+      fraction: this.studioLimit ? Math.min(1, u.cpu / this.studioLimit) : 0,
+      limited: this.studioLimit > 0,
+    };
+  }
+
+  private countUsage(cpu: number, audio: number) {
+    const u = this.monthUsage();
+    u.cpu += cpu;
+    u.audio += audio;
+    store.set(USAGE_KEY, JSON.stringify(u));
   }
 
   // ---------- books ----------
@@ -233,17 +414,28 @@ export class ReaderEngine {
     this.castingByProvider = book.casting ?? {};
     this.accents = book.accents ?? {};
     this.tweaks = book.tweaks ?? {};
-    this.casting = this.castingByProvider[this.provider] ?? {};
     this.scenes.clear();
     this.aiUsed = false;
     this.error = null;
-    const preferred = store.get("vb:provider") as Provider | null;
-    if (preferred && preferred !== this.provider && this.availableProviders().includes(preferred)) this.provider = preferred;
+    this.notice = null;
+    this.storageFull = false;
+    this.lastMusic = null;
+    if (this.studioDown?.kind !== "limit") this.studioDown = null;
+    // Every book starts on the listener's preferred engine again (a fallback is per book).
+    const preferred = store.get(ENGINE_KEY) as Provider | null;
+    const available = this.availableProviders();
+    this.provider = preferred && available.includes(preferred) ? preferred : available[0];
     this.casting = this.castingByProvider[this.provider] ?? {};
     this.recast();
+    this.justOpened = true;
     const pos = book.position ?? { chunk: 0, offset: 0 };
     this.startAt(Math.min(pos.chunk, this.chunks.length - 1), pos.offset);
     library.patch(book.id, { openedAt: Date.now() });
+    library.countAudio(book.id).then((n) => {
+      if (this.bookId !== book.id) return;
+      this.savedPassages = n;
+      this.onChange();
+    });
   }
 
   close() {
@@ -255,12 +447,23 @@ export class ReaderEngine {
     this.chapters = [];
     this.segments = [];
     this.gen++;
+    this.epoch++;
+    this.onChange();
+  }
+
+  /** Forget the saved audio of the open book (frees space; it is generated again when needed). */
+  async clearSavedAudio() {
+    if (!this.bookId) return;
+    await library.clearAudio(this.bookId);
+    this.savedPassages = 0;
+    this.storageFull = false;
     this.onChange();
   }
 
   private startAt(chunk: number, offset: number) {
     this.gen++;
     this.token++;
+    this.epoch++;
     this.segments = [];
     this.groupEnd = 0;
     this.index = 0;
@@ -269,6 +472,7 @@ export class ReaderEngine {
     this.analyzing = false;
     this.pendingOffset = offset;
     this.loadedKey = "";
+    this.lastMusic = null;
     this.analyzeNext();
     this.onChange();
   }
@@ -320,31 +524,27 @@ export class ReaderEngine {
     });
   }
 
-  // ---------- analysis ----------
+  // ---------- voices ----------
 
   voicesFor(p: Provider = this.provider): VoiceOption[] {
+    if (p === "studio") return STUDIO_VOICES;
+    if (p === "builtin") return BUILTIN_VOICES;
     if (p === "openai") return this.config?.voices.openai ?? [];
     if (p === "elevenlabs") return this.config?.voices.elevenlabs ?? [];
-    if (p === "builtin") return BUILTIN_VOICES;
-    const lang = this.meta.language;
     // Device voices: only the best-quality reading voices. English first; another
     // language only when the book itself is in that language.
+    const lang = this.meta.language;
     const good = this.browserVoices.filter((v) => !v.fun);
     const inLang = (l: string) => good.filter((v) => v.lang?.toLowerCase().startsWith(l));
-    const pool = (lang && !lang.startsWith("en") && inLang(lang).length ? inLang(lang) : inLang("en")) || good;
+    const pool = lang && !lang.startsWith("en") && inLang(lang).length ? inLang(lang) : inLang("en");
     const list = pool.length ? pool : good;
     const top = list.filter((v) => v.name.startsWith("★"));
     return top.length ? top : list.slice(0, 4);
   }
 
-  /** True when one device voice reads the whole book. */
+  /** True when one voice reads the whole book. */
   get oneVoice() {
-    return this.provider === "browser" && this.prefs.singleVoice;
-  }
-
-  /** Voices for the picker, grouped. Device voices include every language, accent and the fun ones. */
-  voiceGroups(): { label: string; voices: VoiceOption[] }[] {
-    return [{ label: "", voices: this.voicesFor() }];
+    return this.prefs.singleVoice;
   }
 
   setTweak(speaker: string, t: Partial<VoiceTweak>) {
@@ -359,6 +559,12 @@ export class ReaderEngine {
     this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
     for (const ch of this.characters) if (!(ch.name in this.accents)) this.accents[ch.name] = ch.accent ?? "";
   }
+
+  character(name: string) {
+    return this.characters.find((c) => c.name === name);
+  }
+
+  // ---------- analysis ----------
 
   analyzeNext(): Promise<void> {
     if (this.analyzePromise) return this.analyzePromise;
@@ -390,7 +596,7 @@ export class ReaderEngine {
             if (a && bookId) library.putAnalysis(bookId, c, a);
           }
         } catch {
-          /* network error: fall back for this part */
+          /* no connection: fall back for this part */
         }
       }
       if (gen === this.gen) this.apply(a ?? heuristicAnalyze(text, this.characters), c);
@@ -407,12 +613,10 @@ export class ReaderEngine {
     if (!this.meta.genre || (this.meta.genre === "other" && a.genre !== "other")) this.meta.genre = a.genre;
     if (!this.meta.language && a.language) this.meta.language = a.language;
     if (!this.meta.narrationStyle && a.narrationStyle) this.meta.narrationStyle = a.narrationStyle;
-    if (this.provider === "builtin") {
-      if (this.meta.language && !this.meta.language.toLowerCase().startsWith("en")) {
-        // The built-in voice pack only speaks English.
-        this.setProvider("browser", false);
-        this.notice = `The built-in AI voices only speak English, so this ${this.meta.language.toUpperCase()} book uses your device's voices.`;
-      } else this.builtin.warm();
+    if ((this.provider === "studio" || this.provider === "builtin") && this.meta.language && !this.meta.language.toLowerCase().startsWith("en")) {
+      // The studio voice only speaks English for now.
+      this.setProvider("browser", false);
+      this.notice = `The studio voice only reads English for now, so this ${this.meta.language.toUpperCase()} book is read by your device's own voice.`;
     }
     if (a.scene) this.scenes.set(c, a.scene);
 
@@ -426,181 +630,285 @@ export class ReaderEngine {
       if (s.speaker !== "Narrator" && !byName.has(s.speaker.toLowerCase()))
         byName.set(s.speaker.toLowerCase(), { name: s.speaker, gender: "neutral", age: "adult" });
     }
-    const segs = a.segments.map((s) => ({
+    const segs: RawSegment[] = a.segments.map((s) => ({
       ...s,
       speaker: s.speaker === "Narrator" ? s.speaker : byName.get(s.speaker.toLowerCase())?.name ?? s.speaker,
     }));
+    markParagraphs(segs, this.chunks[c] ?? "");
     this.characters = [...byName.values()];
-    const start = this.segments.length;
-    splitLongSegments(segs, MAX_SEGMENT).forEach((s, i) =>
-      this.segments.push({ ...s, id: `${c}-${start + i}`, chunk: c }),
-    );
-    // Avoid repeating one sound effect on every piece of a split segment.
-    for (let i = start + 1; i < this.segments.length; i++)
-      if (this.segments[i].sfx && this.segments[i].sfx === this.segments[i - 1].sfx) this.segments[i].sfx = "";
+    for (const s of segs) {
+      const pieces = s.text.length <= MAX_SEGMENT ? [s.text] : splitSentences(s.text, MAX_SEGMENT);
+      const spoken = s.speaker !== "Narrator";
+      pieces.forEach((text, k) =>
+        this.segments.push({
+          ...s,
+          text,
+          para: k === 0 ? s.para : false,
+          sfx: k === 0 ? s.sfx : "",
+          quote: spoken ? (k === 0 ? 1 : 0) + (k === pieces.length - 1 ? 2 : 0) : 0,
+          id: `${c}-${this.segments.length}`,
+          chunk: c,
+        }),
+      );
+    }
     this.analyzedUpTo = c;
+    this.recast();
     if (this.pendingOffset !== null) {
-      this.index = Math.min(this.pendingOffset, Math.max(0, this.segments.length - 1));
+      this.snap(Math.min(this.pendingOffset, Math.max(0, this.segments.length - 1)));
       this.pendingOffset = null;
       this.savePosition();
+      if (this.justOpened) {
+        this.justOpened = false;
+        this.prepare();
+      }
+    } else if (this.playing) {
+      const now = this.passageAt(this.index);
+      if (now) this.prepareAhead(now);
     }
-    this.recast();
     this.saveBookState();
   }
 
-  character(name: string) {
-    return this.characters.find((c) => c.name === name);
+  // ---------- passages ----------
+
+  /** A title or chapter heading: read on its own, with a pause after it. */
+  isHeading(s: Segment) {
+    if (s.speaker !== "Narrator") return false;
+    return /heading/i.test(s.delivery ?? "") || (s.text.length < 80 && !/[.!?…"”»,;:]$/.test(s.text.trim()));
   }
 
-  // ---------- playback ----------
-
-  private unlock() {
-    this.soundscape.unlock();
-    if (this.unlocked) return;
-    this.unlocked = true;
-    if ("speechSynthesis" in window) window.speechSynthesis.speak(new SpeechSynthesisUtterance(""));
-    this.silent ||= silentWavUrl();
-    this.audio.src = this.silent;
-    this.audio.play().catch(() => {});
-  }
-
-  play() {
-    this.previewAudio?.pause();
-    if (this.premium) this.soundscape.unlock();
-    const seg = this.segments[this.index];
-    if (this.provider !== "browser" && seg && this.loadedKey === this.keyFor(seg) && this.audio.currentTime > 0 && !this.audio.ended) {
-      const t = ++this.token;
-      this.playing = true;
-      this.audio.onended = () => t === this.token && this.advance();
-      this.audio.play().catch((e) => this.fail(e));
-      this.soundscape.resume();
-      this.onChange();
-      return;
+  /** Last line of the passage that starts at line `s`. */
+  private runFrom(s: number, limit: number): number {
+    const segs = this.segments;
+    const first = segs[s];
+    if (this.isHeading(first)) return s;
+    let len = first.text.length;
+    let j = s;
+    for (;;) {
+      const n = segs[j + 1];
+      if (!n || n.chunk !== first.chunk || this.isHeading(n)) break;
+      if (!this.oneVoice && n.speaker !== first.speaker) break;
+      if (len + 1 + n.text.length > limit) break;
+      if (n.para && len >= limit * 0.5) break; // a paragraph end is the best place to breathe
+      len += 1 + n.text.length;
+      j++;
     }
-    this.unlock();
-    this.playing = true;
-    this.playCurrent();
+    return j;
   }
 
-  pause() {
-    const wasPlaying = this.playing;
-    this.playing = false;
-    this.buffering = false;
-    this.token++;
-    this.audio.pause();
-    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
-    this.soundscape.pause();
-    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
-    if (wasPlaying) this.savePosition();
-    this.onChange();
-  }
-
-  toggle() {
-    this.playing ? this.pause() : this.play();
-  }
-
-  jump(i: number) {
-    this.groupEnd = 0;
-    this.index = Math.max(0, Math.min(i, Math.max(0, this.segments.length - 1)));
-    this.loadedKey = "";
-    if (this.playing) this.playCurrent();
-    else {
-      this.savePosition();
-      this.onChange();
+  /**
+   * First and last line of the passage containing line `i`. Passages are always cut the
+   * same way from the start of a part of the book, so saved audio is found again.
+   */
+  private bounds(i: number): [number, number] {
+    const segs = this.segments;
+    const seg = segs[i];
+    const limit = PASSAGE_CHARS[this.provider];
+    if (!seg || !limit) return [i, i];
+    const ramp = this.provider === "studio" || this.provider === "builtin";
+    let s = i;
+    while (s > 0 && segs[s - 1].chunk === seg.chunk) s--;
+    for (let n = 0; ; ) {
+      const heading = this.isHeading(segs[s]);
+      const e = this.runFrom(s, ramp && !heading ? Math.min(limit, RAMP[n] ?? limit) : limit);
+      if (i <= e) return [s, e];
+      if (!heading) n++;
+      s = e + 1;
     }
   }
 
-  setRate(r: number) {
-    this.rate = r;
-    this.audio.playbackRate = r;
-    store.set("vb:rate", String(r));
-    if (this.playing && this.provider === "browser") this.playCurrent();
-    this.onChange();
+  private pauseAfter(last: Segment, next?: Segment): number {
+    if (this.isHeading(last)) return 750;
+    if (!next || next.chunk !== last.chunk || this.isHeading(next)) return 800;
+    let ms = next.para ? 600 : 320;
+    if (/(…|\.\.\.)["”»]?$/.test(last.text.trim())) ms = Math.max(ms, 520);
+    if (!this.oneVoice && next.speaker !== last.speaker) ms = Math.max(ms, 380);
+    if ((next.tags ?? []).some((t) => /pause/i.test(t))) ms += 400;
+    return ms;
   }
 
-  setProvider(p: Provider, remember = true) {
-    if (remember) this.notice = null;
-    if (!this.availableProviders().includes(p)) {
-      this.premiumPrompt = true;
-      this.onChange();
-      return;
+  private keyOf(provider: Provider, voice: string, text: string, tailMs: number, seg: Segment): string {
+    if (provider === "studio") return `studio|${voice}|${tailMs}|${hash53(text)}`;
+    if (provider === "builtin" || provider === "browser") return `${provider}|${voice}|${hash53(text)}`;
+    // Acting voices: everything that changes the performance is part of the identity.
+    const acting = [seg.emotion, seg.delivery ?? "", (seg.tags ?? []).join(","), seg.intensity ?? 1, this.accents[seg.speaker] ?? ""].join("~");
+    return `${provider}|${voice}|${hash53(`${text}\u0000${acting}`)}`;
+  }
+
+  /** The passage that contains line `i`, ready to be spoken. */
+  passageAt(i: number): Passage | null {
+    if (!this.segments[i]) return null;
+    const [start, end] = this.bounds(i);
+    const first = this.segments[start];
+    const speaker = this.oneVoice ? "Narrator" : first.speaker;
+    const voice = this.casting[speaker] ?? this.casting.Narrator ?? "";
+    const whole = PASSAGE_CHARS[this.provider] > 0;
+    let text = "";
+    for (let k = start; k <= end; k++) {
+      const s = this.segments[k];
+      let line = s.text.trim();
+      // One voice reading dialogue: put the quotation marks back so it is voiced as speech.
+      if (whole && this.oneVoice && s.quote) line = `${s.quote & 1 ? "“" : ""}${line}${s.quote & 2 ? "”" : ""}`;
+      text += (k === start ? "" : s.para ? "\n" : " ") + line;
     }
-    this.pause();
-    this.provider = p;
-    this.loadedKey = "";
-    if (remember) store.set("vb:provider", p);
-    if (p === "builtin" && remember) this.builtin.warm();
-    this.casting = this.castingByProvider[p] ?? {};
-    this.recast();
-    this.saveBookState();
-    this.onChange();
+    const tailMs = this.pauseAfter(this.segments[end], this.segments[end + 1]);
+    return { start, end, speaker, voice, text, tailMs, seg: first, key: this.keyOf(this.provider, voice, text, tailMs, first) };
   }
 
-  setVoice(speaker: string, voiceId: string) {
-    this.casting = { ...this.casting, [speaker]: voiceId };
-    this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
-    this.saveBookState();
-    if (this.playing) this.playCurrent();
-    else this.onChange();
+  /** Point at the start of the passage containing line `i`. */
+  private snap(i: number) {
+    const p = this.passageAt(i);
+    this.index = p ? p.start : Math.max(0, i);
+    this.groupEnd = p ? p.end : this.index;
   }
 
-  setAccent(speaker: string, accent: string) {
-    if (!this.premium) {
-      this.premiumPrompt = true;
-      this.onChange();
-      return;
+  // ---------- getting a passage spoken ----------
+
+  private audioFor(p: Passage, lookAhead = false): Promise<string> {
+    let job = this.cache.get(p.key);
+    if (job) return job;
+    const provider = this.provider;
+    const bookId = this.bookId;
+    const epoch = this.epoch;
+    // Saved for next time, except on-computer audio (free to redo, and large) and voice samples.
+    const keep = provider !== "builtin" && !!bookId && !p.key.startsWith("preview|");
+    job = (async () => {
+      const saved = keep ? await library.getAudio(bookId, p.key) : undefined;
+      if (saved) return URL.createObjectURL(new Blob([saved.buf], { type: saved.type }));
+      const blob = await this.generate(provider, p, lookAhead, epoch);
+      if (keep && !this.storageFull) {
+        blob
+          .arrayBuffer()
+          .then((buf) => library.putAudio(bookId, p.key, { type: blob.type || "audio/mpeg", buf }))
+          .then((ok) => {
+            if (!ok) this.storageFull = true;
+            else if (this.bookId === bookId) this.savedPassages++;
+          })
+          .catch(() => {});
+      }
+      return URL.createObjectURL(blob);
+    })();
+    job.catch(() => this.cache.delete(p.key));
+    this.cache.set(p.key, job);
+    return job;
+  }
+
+  private async generate(provider: Provider, p: Passage, lookAhead: boolean, epoch: number): Promise<Blob> {
+    if (provider === "builtin") return this.builtin.generate(p.text, p.voice || "af_heart", 1);
+    if (provider === "studio") return this.studioSlot(() => this.studioRequest(p), lookAhead, epoch);
+
+    const seg = p.seg;
+    const r = await fetch("/api/tts", {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify({
+        provider,
+        voice: p.voice,
+        text: p.text,
+        emotion: seg.emotion,
+        delivery: seg.delivery,
+        tags: seg.tags,
+        intensity: seg.intensity,
+        prevText: this.segments[p.start - 1]?.text,
+        nextText: this.segments[p.end + 1]?.text,
+        speaker: seg.speaker,
+        character: this.character(seg.speaker),
+        genre: this.meta.genre,
+        narrationStyle: this.meta.narrationStyle,
+        language: this.meta.language,
+        accent: this.accents[seg.speaker] || undefined,
+      }),
+    });
+    if (r.status === 402) this.premiumPrompt = true;
+    if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error ?? `Voice error ${r.status}`);
+    return r.blob();
+  }
+
+  /**
+   * At most two studio requests at a time. Look-ahead work that is still waiting when the
+   * listener moves elsewhere is dropped; the passage being waited for never queues.
+   */
+  private async studioSlot<T>(job: () => Promise<T>, lookAhead: boolean, epoch: number): Promise<T> {
+    if (lookAhead && this.studioActive >= 2) {
+      await new Promise<void>((go) => this.studioQueue.push(go));
+      if (epoch !== this.epoch) {
+        this.studioQueue.shift()?.();
+        throw new VoiceError("stale", "no longer needed");
+      }
     }
-    this.accents = { ...this.accents, [speaker]: accent };
-    this.saveBookState();
-    if (this.playing) this.playCurrent();
-    else this.onChange();
+    this.studioActive++;
+    try {
+      return await job();
+    } finally {
+      this.studioActive--;
+      this.studioQueue.shift()?.();
+    }
   }
 
-  private keyFor(seg: Segment) {
-    const voice = this.casting[seg.speaker] ?? this.casting.Narrator ?? "";
-    return `${this.provider}|${voice}|${this.accents[seg.speaker] ?? ""}|${seg.id}`;
+  private async studioRequest(p: Passage): Promise<Blob> {
+    const down = this.studioDown;
+    if (down && (down.kind === "limit" ? this.studioUsedUp : Date.now() - down.since < RETRY_MS)) throw new VoiceError(down.kind, down.why);
+    try {
+      if (this.studioUsedUp) throw new VoiceError("limit", "this month's free studio-voice allowance is used up");
+      let r: Response;
+      try {
+        r = await fetch("/api/voice", {
+          method: "POST",
+          headers: this.headers(),
+          body: JSON.stringify({ text: p.text, voice: p.voice || "af_heart", tailMs: p.tailMs }),
+          signal: timeoutSignal(295_000),
+        });
+      } catch {
+        throw new VoiceError("offline", "the server can't be reached");
+      }
+      if (!r.ok || !(r.headers.get("content-type") ?? "").startsWith("audio/")) {
+        const info = await r.json().catch(() => null);
+        const reason = typeof info?.error === "string" ? info.error : `the server answered with error ${r.status}`;
+        throw new VoiceError("server", reason);
+      }
+      const blob = await r.blob();
+      this.countUsage(
+        Number(r.headers.get("x-cpu-seconds")) || Number(r.headers.get("x-took-seconds")) || 0,
+        Number(r.headers.get("x-audio-seconds")) || 0,
+      );
+      this.studioReady = true;
+      if (this.studioDown) {
+        // It is back.
+        this.studioDown = null;
+        this.notice = null;
+      }
+      return blob;
+    } catch (e) {
+      const err = e instanceof VoiceError ? e : new VoiceError("server", e instanceof Error ? e.message : String(e));
+      this.studioDown = { kind: err.kind, why: err.message, since: Date.now() };
+      const standIn = builtinSupported() ? "the same voice is made on this computer" : "your device's own voice fills in";
+      this.notice =
+        err.kind === "limit"
+          ? `This month's free studio-voice allowance is used up on this device. Passages already saved still play in the studio voice; for new ones ${standIn} until next month.`
+          : `The studio voice isn't available right now (${err.message}). Saved passages still play; for new ones ${standIn}. It will be tried again in a couple of minutes.`;
+      throw err;
+    }
   }
 
-  private audioFor(seg: Segment): Promise<string> {
-    const key = this.keyFor(seg);
-    let p = this.cache.get(key);
-    if (!p && this.provider === "builtin") {
-      const pr = browserProsody(seg.emotion, undefined, seg.intensity ?? 1);
-      p = this.builtin.generate(seg.text, this.casting[seg.speaker] ?? this.casting.Narrator ?? "af_heart", pr.rate);
-      p.catch(() => this.cache.delete(key));
-      this.cache.set(key, p);
-    }
-    if (!p) {
-      p = fetch("/api/tts", {
-        method: "POST",
-        headers: this.headers(),
-        body: JSON.stringify({
-          provider: this.provider,
-          voice: this.casting[seg.speaker] ?? this.casting.Narrator,
-          text: seg.text,
-          emotion: seg.emotion,
-          delivery: seg.delivery,
-          tags: seg.tags,
-          intensity: seg.intensity,
-          prevText: this.neighbour(seg, -1),
-          nextText: this.neighbour(seg, 1),
-          speaker: seg.speaker,
-          character: this.character(seg.speaker),
-          genre: this.meta.genre,
-          narrationStyle: this.meta.narrationStyle,
-          language: this.meta.language,
-          accent: this.accents[seg.speaker] || undefined,
-        }),
-      }).then(async (r) => {
-        if (r.status === 402) this.premiumPrompt = true;
-        if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error ?? `Voice error ${r.status}`);
-        return URL.createObjectURL(await r.blob());
-      });
-      p.catch(() => this.cache.delete(key));
-      this.cache.set(key, p);
-    }
-    return p;
+  /** Get the passages at the reading position ready before play is pressed. */
+  private prepare() {
+    if (this.provider !== "studio" || this.studioUsedUp || document.visibilityState !== "visible") return;
+    const p = this.passageAt(this.index);
+    if (!p) return;
+    this.audioFor(p).catch(() => {});
+    this.prepareAhead(p);
   }
+
+  private prepareAhead(p: Passage) {
+    let next = p.end + 1;
+    for (let k = 0; k < AHEAD[this.provider]; k++) {
+      const q = this.passageAt(next);
+      if (!q) break;
+      this.audioFor(q, true).catch(() => {});
+      next = q.end + 1;
+    }
+  }
+
+  // ---------- sound effects & background ----------
 
   private get sfxOn() {
     return this.premium && this.prefs.sfx && !!this.config?.providers.elevenlabs;
@@ -619,9 +927,11 @@ export class ReaderEngine {
     return p;
   }
 
-  private playSfx(seg: Segment, t: number) {
-    if (!this.sfxOn || !seg.sfx) return;
-    this.sfxFor(seg.sfx)
+  private playSfx(p: Passage, t: number) {
+    if (!this.sfxOn) return;
+    const desc = this.segments.slice(Math.max(0, p.start), p.end + 1).find((s) => s.sfx)?.sfx;
+    if (!desc) return;
+    this.sfxFor(desc)
       .then((url) => {
         if (t !== this.token) return;
         const a = new Audio(url);
@@ -631,23 +941,248 @@ export class ReaderEngine {
       .catch(() => {});
   }
 
-  private applyScene() {
-    const seg = this.segments[this.index];
-    if (!this.premium || !seg) return this.soundscape.stop();
-    let scene: Scene | undefined;
-    for (let c = seg.chunk; c >= 0 && !scene; c--) scene = this.scenes.get(c);
-    scene ??= { ambience: "none", music: "none" };
-    this.soundscape.setScene({
-      ambience: this.prefs.ambience ? scene.ambience : "none",
-      music: this.prefs.music ? scene.music : "none",
-    });
+  private sceneFor(chunk: number): Scene {
+    for (let c = chunk; c >= 0; c--) {
+      const s = this.scenes.get(c);
+      if (s) return s;
+    }
+    return { ambience: "none", music: "none" };
+  }
+
+  /**
+   * Background sound for a passage. Ambience follows the scene. Music, unless asked for
+   * all the time, only plays for a moment: a chapter opening, a change of mood, an intense line.
+   */
+  private applySound(p: Passage, starting = true) {
+    if (!this.premium) return this.soundscape.stop();
+    const chunk = p.seg.chunk;
+    const scene = this.sceneFor(chunk);
+    this.soundscape.setAmbience(this.prefs.ambience ? scene.ambience : "none");
+
+    if (this.prefs.music === "always") this.soundscape.setMusic(scene.music);
+    else if (this.prefs.music === "moments" && starting) {
+      const firstOfPart = p.start === 0 || this.segments[p.start - 1]?.chunk !== chunk;
+      const chapterOpening = firstOfPart && this.chapters.some((c) => c.chunk === chunk);
+      const moodChanged = !!this.lastMusic && this.lastMusic.chunk !== chunk && this.lastMusic.mood !== scene.music;
+      const intense = this.segments.slice(p.start, p.end + 1).find((s) => (s.intensity ?? 1) >= 3);
+      if (scene.music !== "none" && (chapterOpening || moodChanged)) this.soundscape.musicMoment(scene.music, chapterOpening ? 22 : 30);
+      else if (intense) this.soundscape.musicMoment(MOOD_FOR[intense.emotion] ?? (scene.music !== "none" ? scene.music : "tense"), 20);
+    }
+    if (starting) this.lastMusic = { chunk, mood: scene.music };
+  }
+
+  // ---------- playback ----------
+
+  private unlock() {
+    this.soundscape.unlock();
+    if (this.unlocked) return;
+    this.unlocked = true;
+    if ("speechSynthesis" in window) window.speechSynthesis.speak(new SpeechSynthesisUtterance(""));
+    // Playing (silence) from the tap itself is what lets the player start by itself later.
+    this.holdAudioSession(false);
+  }
+
+  /**
+   * Play silence on the player. Looped while audio is being prepared, so a phone with
+   * its screen off keeps the page running until the passage is ready.
+   */
+  private holdAudioSession(loop = true) {
+    if (!this.unlocked || (loop && this.provider === "browser")) return;
+    this.silent ||= silentWavUrl(6);
+    const a = this.audio;
+    a.onended = null;
+    a.onerror = null;
+    a.loop = loop;
+    a.src = this.silent;
+    a.play().catch(() => {});
+  }
+
+  play() {
+    if (this.previewing) this.previewing = "";
+    if (this.premium) this.soundscape.unlock();
+    const now = this.passageAt(this.index);
+    if (this.provider !== "browser" && now && this.loadedKey === now.key && this.audio.currentTime > 0 && !this.audio.ended) {
+      // Carry on in the middle of the passage.
+      const t = ++this.token;
+      this.playing = true;
+      this.audio.onended = () => t === this.token && this.advance();
+      this.audio.play().catch((e) => this.fail(e));
+      this.soundscape.resume();
+      this.onChange();
+      return;
+    }
+    this.unlock();
+    this.playing = true;
+    this.playCurrent();
+  }
+
+  pause() {
+    const wasPlaying = this.playing;
+    this.playing = false;
+    this.buffering = false;
+    this.waitingSince = 0;
+    this.token++;
+    this.audio.pause();
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    this.soundscape.pause();
+    if ("mediaSession" in navigator) navigator.mediaSession.playbackState = "paused";
+    if (wasPlaying) this.savePosition();
+    this.onChange();
+  }
+
+  toggle() {
+    this.playing ? this.pause() : this.play();
+  }
+
+  /** Go to the passage containing line `i`. */
+  jump(i: number) {
+    this.epoch++;
+    this.lastMusic = null;
+    this.loadedKey = "";
+    this.snap(Math.max(0, Math.min(i, Math.max(0, this.segments.length - 1))));
+    if (this.playing) this.playCurrent();
+    else {
+      this.savePosition();
+      this.onChange();
+    }
+  }
+
+  next() {
+    this.jump(Math.max(this.index, this.groupEnd) + 1);
+  }
+
+  previous() {
+    this.jump(this.index - 1);
+  }
+
+  setRate(r: number) {
+    this.rate = r;
+    this.audio.playbackRate = r;
+    store.set("vb:rate", String(r));
+    if (this.playing && this.provider === "browser") this.playCurrent();
+    this.onChange();
+  }
+
+  setProvider(p: Provider, remember = true) {
+    if (remember) this.notice = null;
+    if (!this.availableProviders().includes(p)) {
+      this.premiumPrompt = true;
+      this.onChange();
+      return;
+    }
+    this.pause();
+    this.epoch++;
+    this.provider = p;
+    this.loadedKey = "";
+    if (remember && p === "studio" && this.studioDown?.kind !== "limit") this.studioDown = null; // choosing it again = try again now
+    if (remember) store.set(ENGINE_KEY, p);
+    if (p === "builtin") this.builtin.warm();
+    this.casting = this.castingByProvider[p] ?? {};
+    this.recast();
+    this.snap(this.index);
+    this.saveBookState();
+    this.onChange();
+  }
+
+  setVoice(speaker: string, voiceId: string) {
+    this.casting = { ...this.casting, [speaker]: voiceId };
+    this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
+    this.loadedKey = "";
+    this.saveBookState();
+    if (this.playing) this.playCurrent();
+    else this.onChange();
+  }
+
+  setAccent(speaker: string, accent: string) {
+    if (!this.premium) {
+      this.premiumPrompt = true;
+      this.onChange();
+      return;
+    }
+    this.accents = { ...this.accents, [speaker]: accent };
+    this.saveBookState();
+    if (this.playing) this.playCurrent();
+    else this.onChange();
+  }
+
+  /** What the listener is waiting for, in words (null when nothing). */
+  get waitMessage(): string | null {
+    if (!this.buffering) return null;
+    if (!this.segments[this.index]) return "Reading the next part of the book…";
+    if (this.provider === "studio" && !this.studioDown) {
+      return this.studioReady ? "Preparing the next passage…" : "Warming up the studio voice. The first time can take up to a minute…";
+    }
+    if (this.provider === "builtin" || this.provider === "studio") {
+      return this.builtin.ready
+        ? "Generating the voice on this computer…"
+        : `Downloading the voice to this computer… ${Math.round((this.builtin.progress ?? 0) * 100)}%`;
+    }
+    return "Preparing the voice…";
   }
 
   private fail(e: unknown) {
     this.error = e instanceof Error ? e.message : String(e);
     this.playing = false;
     this.buffering = false;
+    this.audio.pause();
     this.soundscape.pause();
+    this.onChange();
+  }
+
+  /** The on-computer voice can't deliver: carry on with the device's own voice. False if there is none. */
+  private fallBack(e: unknown): boolean {
+    if (this.provider !== "builtin" || !this.browserVoices.length) return false;
+    const why = e instanceof Error ? e.message : String(e);
+    this.setProvider("browser", false);
+    this.notice = `The voice couldn't be made on this computer (${why}), so your device's own voice is reading.`;
+    return true;
+  }
+
+  /**
+   * The server's studio voice can't deliver this passage: read just this one another way
+   * (made on this computer if it can, else the device's own voice). The studio voice stays
+   * the chosen engine, so saved passages keep playing and it is tried again later.
+   */
+  private async standIn(p: Passage, t: number): Promise<boolean> {
+    if (builtinSupported()) {
+      try {
+        this.onChange();
+        const blob = await this.builtin.generate(p.text, p.voice || "af_heart", 1);
+        if (t !== this.token) return true;
+        await this.startAudio(URL.createObjectURL(blob), p, t, "builtin");
+        return true;
+      } catch {
+        if (t !== this.token) return true;
+      }
+    }
+    const voice = this.voicesFor("browser")[0]?.id;
+    if (!voice || !("speechSynthesis" in window)) return false;
+    this.audio.pause();
+    this.buffering = false;
+    this.waitingSince = 0;
+    this.spokenBy = "browser";
+    this.onChange();
+    this.speakBrowser({ ...p, voice }, t);
+    return true;
+  }
+
+  /** Put a passage's audio on the player and start it. */
+  private async startAudio(url: string, p: Passage, t: number, by: Provider) {
+    const a = this.audio;
+    a.loop = false;
+    a.src = url;
+    a.volume = 1;
+    a.defaultPlaybackRate = this.rate;
+    a.playbackRate = this.rate;
+    this.loadedKey = by === this.provider ? p.key : "";
+    this.spokenBy = by;
+    a.onended = () => t === this.token && this.advance();
+    a.onerror = () => t === this.token && this.fail(new Error("This passage's audio couldn't be played. Tap play to try again."));
+    this.playSfx(p, t);
+    await a.play();
+    if (t !== this.token) return;
+    this.buffering = false;
+    this.waitingSince = 0;
     this.onChange();
   }
 
@@ -659,115 +1194,110 @@ export class ReaderEngine {
 
     while (this.index >= this.segments.length) {
       if (this.analyzedUpTo + 1 >= this.chunks.length) {
+        // The end of the book.
         this.playing = false;
         this.buffering = false;
-        this.index = Math.max(0, this.segments.length - 1);
+        this.snap(Math.max(0, this.segments.length - 1));
         this.soundscape.stop();
         this.onChange();
         return;
       }
       this.buffering = true;
+      this.waitingSince ||= Date.now();
       this.onChange();
+      this.holdAudioSession();
       await this.analyzeNext();
       if (t !== this.token) return;
     }
     if (this.segments.length - this.index < LOOKAHEAD_SEGMENTS) this.analyzeNext();
 
-    const seg = this.segments[this.index];
+    const p = this.passageAt(this.index)!;
+    this.index = p.start;
+    this.groupEnd = p.end;
     this.savePosition();
     this.soundscape.resume();
-    this.applyScene();
+    this.applySound(p);
     if ("mediaSession" in navigator) {
       const ch = this.chapters[this.currentChapterIndex()];
-      navigator.mediaSession.metadata = new MediaMetadata({ title: ch?.title || this.title, artist: seg.speaker, album: this.title });
+      navigator.mediaSession.metadata = new MediaMetadata({ title: ch?.title || this.title, artist: this.title, album: "Voicebook" });
       navigator.mediaSession.playbackState = "playing";
     }
-    for (let k = 1; k <= 3; k++) {
-      const s = this.segments[this.index + k];
-      if (s?.sfx && this.sfxOn) this.sfxFor(s.sfx).catch(() => {});
+    if (this.sfxOn) {
+      for (const s of this.segments.slice(p.end + 1, p.end + 6)) if (s.sfx) this.sfxFor(s.sfx).catch(() => {});
     }
 
     if (this.provider === "browser") {
       this.buffering = false;
-      this.groupEnd = this.oneVoice ? this.flowEnd(this.index) : this.index;
+      this.waitingSince = 0;
+      this.spokenBy = "browser";
       this.onChange();
-      this.playSfx(seg, t);
-      if (this.groupEnd > this.index) {
-        // One voice: read narration and dialogue together in one breath, like a person would.
-        const group = this.segments.slice(this.index, this.groupEnd + 1);
-        this.speakBrowser({ ...seg, text: group.map((s) => s.text).join(" "), emotion: "neutral", intensity: 1 }, t);
-      } else this.speakBrowser(seg, t);
+      this.playSfx(p, t);
+      this.speakBrowser(p, t);
       return;
     }
-    this.groupEnd = this.index;
 
     this.buffering = true;
+    this.waitingSince ||= Date.now();
     this.onChange();
+    this.holdAudioSession();
+    let url: string;
     try {
-      const url = await this.audioFor(seg);
-      if (t !== this.token) return;
-      for (let k = 1; k <= PREFETCH_AUDIO; k++) {
-        const next = this.segments[this.index + k];
-        if (next) this.audioFor(next).catch(() => {});
-      }
-      this.audio.src = url;
-      this.audio.volume = this.provider === "builtin" ? browserProsody(seg.emotion, undefined, seg.intensity ?? 1).volume : 1;
-      this.audio.defaultPlaybackRate = this.rate;
-      this.audio.playbackRate = this.rate;
-      this.loadedKey = this.keyFor(seg);
-      this.audio.onended = () => t === this.token && this.advance();
-      this.playSfx(seg, t);
-      await this.audio.play();
-      if (t !== this.token) return;
-      this.buffering = false;
-      this.onChange();
-      this.evictOld();
+      url = await this.audioFor(p);
     } catch (e) {
       if (t !== this.token) return;
-      if (this.provider === "builtin" && this.browserVoices.length) {
-        // Keep reading with the device's voices rather than stopping.
-        this.setProvider("browser", false);
-        this.notice = "The built-in AI voices couldn't load here (weak connection or not enough memory), so your device's voices are reading instead.";
+      // Dropped as look-ahead while the listener was elsewhere, and now wanted after all: ask again.
+      if (e instanceof VoiceError && e.kind === "stale") return void this.playCurrent();
+      if (this.provider === "studio") {
+        this.prepareAhead(p); // saved passages further on are still wanted
+        if (await this.standIn(p, t)) return;
+        if (t === this.token) this.fail(e);
+      } else if (this.fallBack(e)) {
         this.playing = true;
         this.playCurrent();
       } else this.fail(e);
+      return;
+    }
+    if (t !== this.token) return;
+    this.prepareAhead(p);
+    try {
+      await this.startAudio(url, p, t, this.provider);
+      if (t === this.token) this.evictOld(p.key);
+    } catch (e) {
+      if (t === this.token) this.fail(e);
     }
   }
 
-  private speakBrowser(seg: Segment, t: number, onEnd: () => void = () => this.advance()) {
+  private speakBrowser(p: Passage, t: number, onEnd: () => void = () => this.advance()) {
     const synth = window.speechSynthesis;
-    const who = this.oneVoice ? "Narrator" : seg.speaker;
-    const voiceId = this.casting[who] ?? this.casting.Narrator;
-    const all = synth.getVoices();
-    const v = all.find((x) => x.voiceURI === voiceId);
-    const p = browserProsody(
-      seg.emotion,
-      who === "Narrator" || !this.prefs.characterPitch ? undefined : this.character(seg.speaker),
-      seg.intensity ?? 1,
+    const v = synth.getVoices().find((x) => x.voiceURI === p.voice);
+    const single = p.start === p.end;
+    const prosody = browserProsody(
+      single ? p.seg.emotion : "neutral",
+      p.speaker === "Narrator" || !this.prefs.characterPitch ? undefined : this.character(p.speaker),
+      single ? p.seg.intensity ?? 1 : 1,
       this.prefs.expressiveness,
     );
-    const tweak = this.tweaks[who];
+    const tweak = this.tweaks[p.speaker];
     if (tweak) {
-      p.pitch = Math.min(2, Math.max(0.1, p.pitch * tweak.pitch));
-      p.rate = Math.min(2.5, Math.max(0.4, p.rate * tweak.speed));
+      prosody.pitch = Math.min(2, Math.max(0.1, prosody.pitch * tweak.pitch));
+      prosody.rate = Math.min(2.5, Math.max(0.4, prosody.rate * tweak.speed));
     }
-    // Speak sentence by sentence: some browsers silently cut off long utterances (~15 s).
     // Voices stored on the device read a whole passage in one breath, which sounds most natural.
     // Only online voices need sentence-sized pieces (some browsers cut them off after ~15 s).
-    const pieces = v && v.localService === false ? splitSentences(seg.text, 180) : [seg.text];
+    const pieces = v && v.localService === false ? splitSentences(p.text, 180) : [p.text];
     const speakPiece = (i: number) => {
       if (t !== this.token) return;
       if (i >= pieces.length) return onEnd();
       const u = new SpeechSynthesisUtterance(pieces[i]);
       if (v) u.voice = v;
       u.lang = v?.lang || this.meta.language || "en";
-      u.rate = Math.min(4, p.rate * this.rate);
-      u.pitch = p.pitch;
-      u.volume = p.volume;
+      u.rate = Math.min(4, prosody.rate * this.rate);
+      u.pitch = prosody.pitch;
+      u.volume = prosody.volume;
       u.onend = () => speakPiece(i + 1);
       u.onerror = (e) => {
         if (t !== this.token || e.error === "interrupted" || e.error === "canceled") return;
-        this.fail(new Error(`This device's voice failed (${e.error}). Try another voice in 🎭 Voices.`));
+        this.fail(new Error(`This device's voice failed (${e.error}). Try another voice in 🎭 Voice.`));
       };
       this.utterance = u; // keep a reference: some browsers drop the "end" event otherwise
       synth.speak(u);
@@ -775,109 +1305,88 @@ export class ReaderEngine {
     speakPiece(0);
   }
 
-  private utterance: SpeechSynthesisUtterance | null = null;
-
-  /** A short, natural silence between lines — longer after headings, scene changes and speaker changes. */
-  private gapAfter(seg: Segment, next?: Segment): number {
-    if (!next) return 0;
-    let ms = 140;
-    if (next.speaker !== seg.speaker) ms = 320;
-    if (/heading/i.test(seg.delivery ?? "") || (seg.text.length < 80 && !/[.!?…"”»]$/.test(seg.text))) ms = 750;
-    if (/(…|\.\.\.)$/.test(seg.text)) ms = Math.max(ms, 520);
-    if (next.chunk !== seg.chunk) ms = Math.max(ms, 600);
-    if ((next.tags ?? []).some((t) => /pause/i.test(t))) ms += 400;
-    return (ms * (this.provider === "browser" ? this.prefs.pauses : 1)) / Math.max(0.75, this.rate);
-  }
-
-  private neighbour(seg: Segment, dir: -1 | 1): string | undefined {
-    const i = this.segments.indexOf(seg);
-    return i < 0 ? undefined : this.segments[i + dir]?.text;
-  }
-
-  /** Last line read together with the current one (one-voice mode). */
-  groupEnd = 0;
-
-  private isHeading(s: Segment) {
-    return /heading/i.test(s.delivery ?? "") || (s.text.length < 80 && !/[.!?…"”»,;:]$/.test(s.text.trim()));
-  }
-
-  private flowEnd(i: number): number {
-    const first = this.segments[i];
-    if (this.isHeading(first)) return i;
-    let len = first.text.length;
-    let j = i;
-    for (let n = this.segments[j + 1]; n && n.chunk === first.chunk && !this.isHeading(n) && len + n.text.length <= 450; n = this.segments[j + 1]) {
-      len += n.text.length + 1;
-      j++;
-    }
-    return j;
-  }
-
   private advance() {
-    const seg = this.segments[Math.max(this.index, this.groupEnd)];
-    this.index = Math.max(this.index, this.groupEnd);
-    this.index++;
+    const last = this.segments[Math.max(this.index, this.groupEnd)];
+    this.index = Math.max(this.index, this.groupEnd) + 1;
+    this.groupEnd = this.index;
     this.loadedKey = "";
     if (!this.playing) return this.onChange();
-    const gap = seg ? this.gapAfter(seg, this.segments[this.index]) : 0;
+    // The studio voice has its pause built into the audio, so the next passage starts at
+    // once (this also keeps playing reliable on a locked phone). Other engines get a timed gap.
+    const gap =
+      this.spokenBy === "studio" || !last
+        ? 0
+        : (this.pauseAfter(last, this.segments[this.index]) * (this.spokenBy === "browser" ? this.prefs.pauses : 0.6)) / Math.max(0.75, this.rate);
     const t = this.token;
-    this.onChange();
-    if (gap) setTimeout(() => this.playing && t === this.token && this.playCurrent(), gap);
-    else this.playCurrent();
+    if (gap) {
+      this.onChange();
+      setTimeout(() => this.playing && t === this.token && this.playCurrent(), gap);
+    } else this.playCurrent();
   }
 
   // ---------- voice preview ----------
 
-  private previewAudio: HTMLAudioElement | null = null;
-  previewing = "";
-
-  /** Plays a short sample of the voice currently cast for `speaker`. */
+  /** Plays a short sample of the voice currently chosen for `speaker`. */
   async preview(speaker: string) {
     this.pause();
     this.unlock();
-    this.previewAudio?.pause();
-    const line =
-      this.segments.find((s) => s.speaker === speaker && s.text.length > 25 && s.text.length < 220) ??
-      this.segments.find((s) => s.speaker === speaker);
-    const sample: Segment = line ?? {
-      id: `preview-${speaker}`,
+    const who = this.oneVoice ? "Narrator" : speaker;
+    const voice = this.casting[who] ?? this.casting.Narrator ?? "";
+    const fits = (s: Segment) => (this.oneVoice ? s.speaker === "Narrator" : s.speaker === speaker) && !this.isHeading(s);
+    const line = this.segments.find((s) => fits(s) && s.text.length > 60 && s.text.length < 170) ?? this.segments.find((s) => fits(s) && s.text.length > 20);
+    const seg: Segment = line ?? {
+      id: "preview",
       chunk: -1,
-      speaker,
+      speaker: who,
       emotion: "neutral",
-      text: speaker === "Narrator" ? "Once upon a time, in a quiet town by the sea, a story was waiting to be told." : `Hello. My name is ${speaker}.`,
+      text: who === "Narrator" ? "Once upon a time, in a quiet town by the sea, a story was waiting to be told." : `Hello. My name is ${speaker}.`,
     };
+    const text = seg.text.length > 170 ? splitSentences(seg.text, 170)[0] : seg.text;
+    const sample: Passage = { start: -1, end: -1, speaker: who, voice, text, tailMs: 200, seg, key: `preview|${this.keyOf(this.provider, voice, text, 200, seg)}` };
+    const t = ++this.token;
     this.previewing = speaker;
+    this.error = null;
     this.onChange();
     try {
       if (this.provider === "browser") {
-        const t = ++this.token;
         await new Promise<void>((resolve) => {
           this.speakBrowser(sample, t, resolve);
-          setTimeout(resolve, 15000); // safety net if the device never fires "end"
+          setTimeout(resolve, 15000); // safety net if the device never reports the end
         });
       } else {
-        const url = await this.audioFor({ ...sample, id: `preview-${sample.id}` });
-        this.previewAudio = new Audio(url);
-        this.previewAudio.playbackRate = this.rate;
-        await this.previewAudio.play();
-        await new Promise((r) => this.previewAudio!.addEventListener("ended", r, { once: true }));
+        this.holdAudioSession();
+        const url = await this.audioFor(sample);
+        if (t !== this.token) return;
+        const a = this.audio;
+        a.loop = false;
+        a.src = url;
+        a.playbackRate = this.rate;
+        this.loadedKey = "";
+        await new Promise<void>((resolve, reject) => {
+          a.onended = () => resolve();
+          a.onerror = () => reject(new Error("The sample couldn't be played."));
+          a.play().catch(reject);
+        });
       }
     } catch (e) {
-      this.error = e instanceof Error ? e.message : String(e);
+      if (t === this.token) this.error = e instanceof Error ? e.message : String(e);
     } finally {
-      this.previewing = "";
+      if (this.previewing === speaker) this.previewing = "";
+      if (t === this.token) this.audio.pause();
       this.onChange();
     }
   }
 
-  private evictOld() {
-    const keep = new Set(this.segments.slice(Math.max(0, this.index - 3), this.index + 5).map((s) => s.id));
-    for (const [key, p] of this.cache) {
-      const id = key.split("|").pop()!;
-      if (!keep.has(id)) {
-        this.cache.delete(key);
-        p.then((u) => setTimeout(() => URL.revokeObjectURL(u), 1000)).catch(() => {});
-      }
+  // ---------- housekeeping ----------
+
+  /** Keep only the most recent audio in memory (saved audio stays on the device). */
+  private evictOld(current: string) {
+    const keys = [...this.cache.keys()];
+    for (const key of keys.slice(0, Math.max(0, keys.length - 10))) {
+      if (key === current) continue;
+      const job = this.cache.get(key)!;
+      this.cache.delete(key);
+      job.then((u) => setTimeout(() => URL.revokeObjectURL(u), 1000)).catch(() => {});
     }
   }
 

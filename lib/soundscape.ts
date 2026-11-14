@@ -1,6 +1,11 @@
 // Generative background ambience + music, synthesised live with the Web Audio API.
 // No audio files, no licensing, no network – and it never repeats exactly.
-import type { Ambience, Mood, Scene } from "./types";
+//
+// Background sound should serve the story, not sit on top of it:
+//  - ambience (rain, sea…) establishes a scene, then settles to a quiet bed;
+//  - music plays for a moment (a chapter opening, a change of mood, an intense
+//    line) and fades away again, unless the listener asks for it all the time.
+import type { Ambience, Mood } from "./types";
 
 type Layer = { out: GainNode; stop: () => void };
 
@@ -28,8 +33,10 @@ export class Soundscape {
   private noise!: AudioBuffer;
   private brown!: AudioBuffer;
   private amb: { key: Ambience; layer: Layer } | null = null;
-  private mus: { key: Mood; layer: Layer } | null = null;
-  volume = 0.6;
+  /** `until` = when a music moment ends, in audio-clock seconds (null = plays on) */
+  private mus: { key: Mood; layer: Layer; until: number | null } | null = null;
+  private watch: ReturnType<typeof setInterval> | null = null;
+  volume = 0.45;
 
   /** Must be called from a click/tap the first time (browser autoplay rules). */
   unlock() {
@@ -58,20 +65,50 @@ export class Soundscape {
     if (this.ctx?.state === "suspended") this.ctx.resume().catch(() => {});
   }
 
-  setScene(scene: Scene) {
+  /** The scene's background sound: comes in, then settles to a quiet bed. */
+  setAmbience(kind: Ambience) {
+    if (!this.ctx || (this.amb?.key ?? "none") === kind) return;
+    this.fadeOut(this.amb?.layer);
+    this.amb = kind === "none" ? null : { key: kind, layer: this.establish(this.ambience(kind)) };
+  }
+
+  /** Music that keeps playing for a mood ("none" stops any music). */
+  setMusic(mood: Mood) {
     if (!this.ctx) return;
-    if (this.amb?.key !== scene.ambience) {
-      this.fadeOut(this.amb?.layer);
-      this.amb = scene.ambience === "none" ? null : { key: scene.ambience, layer: this.fadeIn(this.ambience(scene.ambience)) };
+    if (this.mus && this.mus.key === mood) {
+      this.mus.until = null;
+      return;
     }
-    if (this.mus?.key !== scene.music) {
+    this.fadeOut(this.mus?.layer);
+    this.mus = mood === "none" ? null : { key: mood, layer: this.fadeIn(this.music(mood)), until: null };
+  }
+
+  /** Music for a moment: fades in, plays for `seconds` of listening, then fades away. */
+  musicMoment(mood: Mood, seconds: number) {
+    if (!this.ctx || mood === "none") return;
+    const until = this.ctx.currentTime + seconds;
+    if (this.mus?.key === mood) {
+      if (this.mus.until !== null) this.mus.until = Math.max(this.mus.until, until);
+    } else {
       this.fadeOut(this.mus?.layer);
-      this.mus = scene.music === "none" ? null : { key: scene.music, layer: this.fadeIn(this.music(scene.music)) };
+      this.mus = { key: mood, layer: this.fadeIn(this.music(mood)), until };
     }
+    // The audio clock stands still while paused, so a moment lasts `seconds` of actual listening.
+    this.watch ??= setInterval(() => {
+      if (!this.ctx || !this.mus || this.mus.until === null || this.ctx.currentTime < this.mus.until) return;
+      this.fadeOut(this.mus.layer, 6);
+      this.mus = null;
+    }, 1000);
+  }
+
+  /** True while music is sounding (used by the interface). */
+  get musicPlaying(): Mood | null {
+    return this.mus?.key ?? null;
   }
 
   stop() {
-    this.setScene({ ambience: "none", music: "none" });
+    this.setAmbience("none");
+    this.setMusic("none");
   }
 
   // ---------- helpers ----------
@@ -99,16 +136,28 @@ export class Soundscape {
     return layer;
   }
 
-  private fadeOut(layer?: Layer) {
+  /** Ambience: fade in, hold while the scene is set, then drop to a quiet bed. */
+  private establish(layer: Layer): Layer {
+    const t = this.ctx!.currentTime;
+    const g = layer.out.gain;
+    g.setValueAtTime(0, t);
+    g.linearRampToValueAtTime(1, t + 3);
+    g.setValueAtTime(1, t + 14);
+    g.linearRampToValueAtTime(0.35, t + 26);
+    layer.out.connect(this.master);
+    return layer;
+  }
+
+  private fadeOut(layer?: Layer, seconds = 2.5) {
     if (!layer || !this.ctx) return;
     const t = this.ctx.currentTime;
     layer.out.gain.cancelScheduledValues(t);
     layer.out.gain.setValueAtTime(layer.out.gain.value, t);
-    layer.out.gain.linearRampToValueAtTime(0, t + 2.5);
+    layer.out.gain.linearRampToValueAtTime(0, t + seconds);
     setTimeout(() => {
       layer.stop();
       layer.out.disconnect();
-    }, 2800);
+    }, seconds * 1000 + 300);
   }
 
   private src(buf: AudioBuffer) {

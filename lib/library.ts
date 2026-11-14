@@ -1,5 +1,6 @@
-// The user's library, stored on the device (IndexedDB): books, chapters,
-// the exact place you paused, and the voices you picked.
+// The user's library, stored on the device (IndexedDB): books, chapters, the exact
+// place you paused, the voices you picked, and the audio that was already generated
+// (so nothing is ever generated twice and saved passages play without a connection).
 import type { Analysis, Chapter, Character, Provider } from "./types";
 
 export interface BookRecord {
@@ -29,15 +30,23 @@ const DB = "voicebook";
 const STORE = "books";
 /** AI analysis per part of a book, so reopening or jumping back is instant and costs nothing. */
 const ANALYSIS = "analysis";
+/** Generated speech per passage: { type, buf } keyed by book + passage. */
+const AUDIO = "audio";
+
+export interface SavedAudio {
+  type: string;
+  buf: ArrayBuffer;
+}
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 function db(): Promise<IDBDatabase> {
   dbPromise ??= new Promise<IDBDatabase>((resolve, reject) => {
-    const req = indexedDB.open(DB, 2);
+    const req = indexedDB.open(DB, 3);
     req.onupgradeneeded = () => {
       const d = req.result;
       if (!d.objectStoreNames.contains(STORE)) d.createObjectStore(STORE, { keyPath: "id" });
       if (!d.objectStoreNames.contains(ANALYSIS)) d.createObjectStore(ANALYSIS);
+      if (!d.objectStoreNames.contains(AUDIO)) d.createObjectStore(AUDIO);
     };
     req.onsuccess = () => {
       req.result.onversionchange = () => {
@@ -55,13 +64,17 @@ function db(): Promise<IDBDatabase> {
 async function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>, store = STORE): Promise<T> {
   const d = await db();
   return new Promise((resolve, reject) => {
-    const r = fn(d.transaction(store, mode).objectStore(store));
+    const t = d.transaction(store, mode);
+    const r = fn(t.objectStore(store));
     r.onsuccess = () => resolve(r.result);
     r.onerror = () => reject(r.error);
+    t.onabort = () => reject(t.error ?? new Error("storage full"));
   });
 }
 
 const analysisKey = (id: string, chunk: number) => `${id}\u0000${chunk}`;
+const audioKey = (id: string, key: string) => `${id}\u0000${key}`;
+const ofBook = (id: string) => IDBKeyRange.bound(`${id}\u0000`, `${id}\u0000\uffff`);
 
 export const library = {
   async get(id: string) {
@@ -93,8 +106,39 @@ export const library = {
   async remove(id: string) {
     try {
       await tx("readwrite", (s) => s.delete(id));
-      await tx("readwrite", (s) => s.delete(IDBKeyRange.bound(analysisKey(id, 0).slice(0, -1), `${id}\u0000\uffff`)), ANALYSIS);
+      await tx("readwrite", (s) => s.delete(ofBook(id)), ANALYSIS);
+      await tx("readwrite", (s) => s.delete(ofBook(id)), AUDIO);
     } catch {}
+  },
+  async getAudio(id: string, key: string) {
+    try {
+      return (await tx("readonly", (s) => s.get(audioKey(id, key)), AUDIO)) as SavedAudio | undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  /** Returns false when the device has no room left. */
+  async putAudio(id: string, key: string, audio: SavedAudio): Promise<boolean> {
+    try {
+      await tx("readwrite", (s) => s.put(audio, audioKey(id, key)), AUDIO);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  /** Delete a book's saved audio (the book and your place in it stay). */
+  async clearAudio(id: string) {
+    try {
+      await tx("readwrite", (s) => s.delete(ofBook(id)), AUDIO);
+    } catch {}
+  },
+  /** How many passages of a book have saved audio. */
+  async countAudio(id: string): Promise<number> {
+    try {
+      return await tx("readonly", (s) => s.count(ofBook(id)), AUDIO);
+    } catch {
+      return 0;
+    }
   },
   async getAnalysis(id: string, chunk: number) {
     try {

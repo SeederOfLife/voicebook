@@ -4,13 +4,13 @@
 
 Upload a **PDF, EPUB, TXT, Markdown or HTML** and listen to it like a real audiobook:
 
-- **Adapts to the content.** The AI finds out if it's a novel, a children's story, a guide, a textbook, news or poetry, and changes the narration style to match.
-- **A voice for each character.** It works out who is speaking and gives every character their own voice (by gender, age and personality). You can change any voice yourself.
-- **Emotion and intonation.** Each line is tagged *sad, angry, whispering, excited, fearful…*, and the voice performs it.
+- **Studio voice, no key needed.** A studio-quality neural voice (Kokoro, full precision) is generated on the app's own server, so it works on every device, phones included. It reads English, in 12 curated voices; one voice reads everything by default, or each character can have their own.
+- **Audio is saved on the device.** Every passage is generated once, then kept (as MP3, about 36 MB per hour), so replaying is instant, works without a connection, and never costs server time twice.
 - **Chapters sidebar.** It uses the PDF bookmarks, the EPUB chapters, or headings like "Chapter 3" / "Kapitola 2" / "Chapitre 4". Tap a chapter to jump to it.
-- **Remembers your place.** Each book is saved on the device with the exact sentence you stopped at, plus your voice choices. Open the app and tap *Continue listening*.
-- **All included:** expressive AI voices, accents, sound effects, ambience that follows the scene (rain, storm, sea, fire, forest, night, city, cave) and background music that follows the mood.
-- Works on phones: lock-screen controls, speed control, and it keeps reading while you scroll.
+- **Remembers your place.** Each book is saved on the device with the passage you stopped at, plus your voice choices. Open the app and tap *Continue listening*.
+- **Background sound that serves the story.** Scene sounds (rain, storm, sea, fire, forest, night, city, cave) set the scene and then settle; music comes in only at key moments (a chapter opening, a change of mood, an intense line) unless you ask for it all the time.
+- **Optional, with your own keys:** AI analysis of characters and emotions (Anthropic), acting voices that perform each line (ElevenLabs v3 or OpenAI), sound effects (ElevenLabs).
+- Works on phones: lock-screen controls, speed control, and it keeps reading with the screen off.
 
 ---
 
@@ -35,15 +35,27 @@ Upload a **PDF, EPUB, TXT, Markdown or HTML** and listen to it like a real audio
 | `OPENAI_API_KEY` | Expressive voices steered by acting directions (gpt-4o-mini-tts) | platform.openai.com |
 | `APP_PASSWORD` | *(personal mode)* protects your app so nobody else uses your credits | anything you choose |
 
-**Built-in AI voices (no key needed):** the app includes a neural voice pack (Kokoro) that runs inside the browser: 27 English voices, American and British. The first use downloads about 90 MB once; after that it is cached. On computers it is on by default; on phones and tablets it is a switch in 🎭 Voices (experimental: phone browsers may not allow enough memory, and the app switches it back off if the page gets closed) and speaks **English only**; other languages use the device voices or the API voices.
+None of these are required: without any key the app reads in the **studio voice**.
 
-You need **at least the Anthropic key** for the smart features. Without any keys the app still works in "basic mode": free device voices, dialogue/narration split, pitch changes for emotions and keyword-based ambience.
+### The studio voice and its monthly allowance
+
+The studio voice runs inside a Vercel Function (`/api/voice`): the first request downloads the voice model (326 MB) into the function's temp folder, which takes 10–20 seconds; after that a passage is generated in roughly the time it takes to listen to it, so the app prepares passages ahead of the listener.
+
+Generating speech uses server computing time: about one CPU-second per second of audio. **Vercel's free (Hobby) plan includes 4 CPU-hours a month**, and if an account goes over, its functions stop until the period resets. To stay clear of that, each device stops asking for new studio audio after **3 CPU-hours a month (roughly 3 hours of new audio)** and reads with the device's own voice until the month is over; audio already saved keeps playing in the studio voice. This guard is per device, so it is a safety net rather than an exact meter.
+
+| Variable | What it does |
+|---|---|
+| `STUDIO_MONTHLY_HOURS` | Monthly allowance per device in CPU-hours. Default `3`. On a paid Vercel plan (where extra CPU time costs about $0.13 per hour) set it higher, or `0` for no limit. |
+| `STUDIO_VOICE` | `off` switches the studio voice off. |
+| `KOKORO_MODEL` | `fp32` (default when the function has 2 GB of memory) or `q8` (smaller, slightly less clean). |
+
+On computers the same voice can also be generated inside the browser ("Studio voice · made on this computer": a 90 MB download, no server time). Phones and tablets don't have the memory for that. Books in other languages are read by the device's own voice, or by the acting voices if you add a key.
 
 Optional: `ANTHROPIC_MODEL` (default `claude-haiku-5-5`; `claude-sonnet-5-5` is better at spotting characters), `ELEVENLABS_MODEL` (default `eleven_v3`), `ELEVENLABS_SFX_MODEL` (default `eleven_text_to_sound_v3`), `OPENAI_TTS_MODEL`.
 
 ### Personal mode vs. accounts mode
 
-- **Open mode** (default): every feature is unlocked for everyone who opens the app, with no sign-in. Anyone with the link uses *your* API credits, so set `APP_PASSWORD` unless you want that.
+- **Open mode** (default): every feature is unlocked for everyone who opens the app, with no sign-in. Anyone with the link uses *your* server time and API credits, so set `APP_PASSWORD` unless you want that.
 - **Accounts mode**: turns on only when you set `PAYWALL=on` **and** the Supabase variables below. Visitors sign in (email link or Google). Free users get device voices plus the AI analysis; **Premium** users get the AI voices, accents, sound effects, ambience and music.
 
 ## 4. Accounts (Supabase), optional
@@ -81,16 +93,19 @@ Book file ─► (browser) extract text + chapters ─► split into parts
                      /api/analyze (Claude) ◄───────────┘  one part at a time, just ahead of you
      genre · characters · speaker + emotion per line · scene · sound effects
                                                        │
-       /api/tts (ElevenLabs v3 / OpenAI)  or device voices (free)
+   lines are grouped into passages (a few sentences, cut the same way every time)
+                                                       │
+   /api/voice (studio voice, on this server)  ·  /api/tts (ElevenLabs v3 / OpenAI)  ·  device voice
                   + /api/sfx (ElevenLabs)  + live-generated ambience & music (Web Audio)
                                                        │
-                                     player: prefetch, highlight, chapters, resume
+            player: prepares passages ahead, saves the audio, chapters, resume
 ```
 
 - **Analysis is saved per book** on the device, so reopening a book or jumping back is instant and isn't charged twice.
 - **Files stay on your device.** Books are read in the browser and saved locally (IndexedDB). Only the passage being prepared is sent for analysis or speech.
 - **Ambience and music are generated live** with the Web Audio API: no audio files, no licensing, no extra cost.
-- **Costs** (your API accounts): analysis costs a few cents per book with Haiku. Voices are the main cost: ElevenLabs charges per character, OpenAI is cheaper. A 300-page novel is about 600k characters, so try the sample first.
+- **Costs**: the studio voice costs nothing within the allowance above. With your own keys, analysis costs a few cents per book with Haiku; acting voices are the main cost: ElevenLabs charges per character, OpenAI is cheaper. A 300-page novel is about 600k characters, so try the sample first.
+- **Troubleshooting the studio voice**: open `/api/voice?test=1` in a browser. It loads the voice model, speaks one sentence and answers `"ok": true` with the timings, or `"ok": false` with the reason. Plain `/api/voice` shows the current state without running anything.
 - Scanned PDFs (photos of pages) have no text layer and aren't supported. Use a text PDF or an EPUB.
 
 ## Run locally
@@ -106,6 +121,9 @@ npm run dev                  # http://localhost:3000
 | Want to… | Edit |
 |---|---|
 | Change how the AI reads / casts | `lib/prompts.ts` |
+| Change the studio voices on offer | `lib/voices.ts` (`STUDIO_VOICES`) |
+| Change how the studio voice is generated (pauses, batching, level) | `lib/studio/kokoro.ts` |
+| Change passage length and what is prepared ahead | `lib/engine.ts` (`PASSAGE_CHARS`, `RAMP`, `AHEAD`) |
 | Change default voices per genre | `lib/voices.ts` (`NARRATOR_PREFS`) |
 | Change ambience/music sounds | `lib/soundscape.ts` |
 | Change what Free vs Premium gets | `lib/access.ts`, `app/api/tts/route.ts`, `lib/engine.ts` |

@@ -28,10 +28,15 @@ export async function GET(req: Request) {
   const premium = a.ok && a.plan === "premium";
   const config: AppConfig = {
     providers: {
+      // The studio voice runs on this server itself: no key needed.
+      studio: process.env.STUDIO_VOICE !== "off",
       elevenlabs: !!ekey,
       openai: !!process.env.OPENAI_API_KEY,
       anthropic: !!process.env.ANTHROPIC_API_KEY,
     },
+    studioMonthlyHours: Number.isFinite(Number(process.env.STUDIO_MONTHLY_HOURS)) && process.env.STUDIO_MONTHLY_HOURS !== undefined && process.env.STUDIO_MONTHLY_HOURS !== ""
+      ? Math.max(0, Number(process.env.STUDIO_MONTHLY_HOURS))
+      : 3,
     passwordRequired: a.passwordRequired,
     authorized: a.ok,
     mode: a.mode,

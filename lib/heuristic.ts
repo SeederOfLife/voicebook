@@ -16,7 +16,7 @@ const SCENE_WORDS: [Ambience, RegExp][] = [
 ];
 
 function guessScene(text: string, genre: Genre): { ambience: Ambience; music: Mood } {
-  if (genre !== "novel") return { ambience: "none", music: genre === "guide" ? "none" : "calm" };
+  if (genre !== "novel") return { ambience: "none", music: "none" };
   let best: Ambience = "none";
   let n = 1;
   for (const [amb, re] of SCENE_WORDS) {

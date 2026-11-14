@@ -16,6 +16,23 @@ export const OPENAI_VOICES: VoiceOption[] = [
   { id: "alloy", name: "Alloy", gender: "neutral" },
 ];
 
+// The studio voice (Kokoro). Only its best-rated English voices are offered; the
+// first is the default reading voice.
+export const STUDIO_VOICES: VoiceOption[] = [
+  { id: "af_heart", name: "Heart · warm, American", gender: "female", useCase: "narration" },
+  { id: "af_bella", name: "Bella · lively, American", gender: "female" },
+  { id: "bf_emma", name: "Emma · British", gender: "female" },
+  { id: "am_michael", name: "Michael · American", gender: "male" },
+  { id: "bm_george", name: "George · British", gender: "male" },
+  { id: "am_fenrir", name: "Fenrir · deep, American", gender: "male" },
+  { id: "af_nicole", name: "Nicole · soft, close", gender: "female" },
+  { id: "bm_fable", name: "Fable · British storyteller", gender: "male" },
+  { id: "am_puck", name: "Puck · bright, American", gender: "male" },
+  { id: "af_sarah", name: "Sarah · American", gender: "female" },
+  { id: "af_aoede", name: "Aoede · American", gender: "female" },
+  { id: "bf_isabella", name: "Isabella · British", gender: "female" },
+];
+
 // Used only if the ElevenLabs voice list can't be fetched.
 export const ELEVENLABS_FALLBACK_VOICES: VoiceOption[] = [
   { id: "JBFqnCBsd6RMkjVDRZzb", name: "George", gender: "male", useCase: "narration" },

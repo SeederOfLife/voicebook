@@ -71,11 +71,15 @@ export interface RawSegment {
   tags?: string[];
   /** 1 = subtle, 2 = clear, 3 = intense */
   intensity?: number;
+  /** true when this line starts a new paragraph in the book (worked out by the reader) */
+  para?: boolean;
 }
 
 export interface Segment extends RawSegment {
   id: string;
   chunk: number;
+  /** Spoken dialogue cut into pieces: 1 = this piece opens the quotation, 2 = closes it, 3 = both */
+  quote?: number;
 }
 
 export interface Analysis {
@@ -87,7 +91,14 @@ export interface Analysis {
   scene?: Scene;
 }
 
-export type Provider = "elevenlabs" | "openai" | "builtin" | "browser";
+/**
+ * Voice engines:
+ *  - studio:     studio-quality neural voice generated on this app's own server (free, no key)
+ *  - elevenlabs / openai: acting voices through the owner's API key
+ *  - builtin:    the studio voice generated inside the browser (computers only)
+ *  - browser:    the device's own text-to-speech
+ */
+export type Provider = "studio" | "elevenlabs" | "openai" | "builtin" | "browser";
 
 export interface VoiceOption {
   id: string;
@@ -100,7 +111,9 @@ export interface VoiceOption {
 }
 
 export interface AppConfig {
-  providers: { elevenlabs: boolean; openai: boolean; anthropic: boolean };
+  providers: { studio: boolean; elevenlabs: boolean; openai: boolean; anthropic: boolean };
+  /** Studio voice: server time a device may use per month, in CPU-hours (0 = no limit) */
+  studioMonthlyHours: number;
   passwordRequired: boolean;
   authorized: boolean;
   /** "open" = personal mode (no accounts, everything unlocked); "accounts" = Supabase sign-in + plans */

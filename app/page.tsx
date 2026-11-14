@@ -11,11 +11,28 @@ import { ACCENTS, type AppConfig, type Provider } from "@/lib/types";
 import { hash } from "@/lib/voices";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
-  elevenlabs: "ElevenLabs · most expressive",
-  openai: "OpenAI · expressive",
-  builtin: "Built-in AI voices · free",
-  browser: "Device voices · free",
+  studio: "Studio voice",
+  elevenlabs: "ElevenLabs · acting voices",
+  openai: "OpenAI · acting voices",
+  builtin: "Studio voice · made on this computer",
+  browser: "Device voice · basic",
 };
+
+/** Used when the server can't be reached: the app still opens and plays what is saved. */
+const OFFLINE_CONFIG: AppConfig = {
+  providers: { studio: true, elevenlabs: false, openai: false, anthropic: false },
+  studioMonthlyHours: 3,
+  passwordRequired: false,
+  authorized: true,
+  mode: "open",
+  plan: "premium",
+  user: null,
+  supabase: null,
+  billing: false,
+  voices: { openai: [], elevenlabs: [] },
+};
+
+const MUSIC_LABEL = { off: "Off", moments: "At key moments", always: "All the time" } as const;
 
 const GENRE_LABEL: Record<string, string> = {
   novel: "Story / novel",
@@ -94,8 +111,14 @@ export default function Home() {
   const refreshBooks = useCallback(() => library.list().then(setBooks), []);
 
   const loadConfig = useCallback(async (e: ReaderEngine) => {
-    const r = await fetch("/api/config", { headers: e.headers() });
-    const c: AppConfig = await r.json();
+    let c: AppConfig;
+    try {
+      const r = await fetch("/api/config", { headers: e.headers() });
+      if (!r.ok) throw new Error(String(r.status));
+      c = await r.json();
+    } catch {
+      c = OFFLINE_CONFIG; // no connection (or the server is down): open anyway
+    }
     setCfg(c);
     e.setConfig(c);
     return c;
@@ -104,6 +127,7 @@ export default function Home() {
   useEffect(() => {
     const e = new ReaderEngine(() => setTick((t) => t + 1));
     engineRef.current = e;
+    (window as unknown as { __voicebook?: ReaderEngine }).__voicebook = e; // handy when troubleshooting
     let unsub: (() => void) | undefined;
     (async () => {
       try {
@@ -128,7 +152,7 @@ export default function Home() {
           setTimeout(() => loadConfig(e), 2500); // give the Stripe webhook a moment
         }
       } catch {
-        setLoadError("Could not reach the server.");
+        /* sign-in is unavailable right now; the reader still works */
       }
     })();
     refreshBooks();
@@ -143,6 +167,14 @@ export default function Home() {
   useEffect(() => {
     activeRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [e?.index, e?.segments.length === 0]);
+
+  // While audio is being prepared, refresh once a second so the wait is visibly counted.
+  const waiting = !!e?.buffering;
+  useEffect(() => {
+    if (!waiting) return;
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [waiting]);
 
   const openBook = async (title: string, sections: { title: string; text: string }[]) => {
     if (!e) return;
@@ -262,8 +294,12 @@ export default function Home() {
   const current = e.segments[e.index];
   const progress = hasBook ? e.progress() : 0;
   const voices = e.voicesFor();
-  const voiceGroups = e.voiceGroups();
   const deviceVoices = e.provider === "browser";
+  const actingVoices = e.provider === "elevenlabs" || e.provider === "openai";
+  /** Show who speaks (names, colours) only when characters have their own voices. */
+  const cast = !e.oneVoice;
+  const usage = e.studioUsage();
+  const waitedFor = e.waitingSince ? Math.max(0, Math.round((Date.now() - e.waitingSince) / 1000)) : 0;
   const speakers = e.oneVoice ? ["Narrator"] : ["Narrator", ...e.characters.map((c) => c.name)];
   const chapterIdx = e.currentChapterIndex();
   const premium = e.premium;
@@ -318,10 +354,10 @@ export default function Home() {
       {/* ---------- Home / library ---------- */}
       {!hasBook && (
         <section className="hero">
-          <h1>Books that read themselves <em>like a performance.</em></h1>
+          <h1>Any book, read to you <em>in a studio voice.</em></h1>
           <p className="muted">
-            Drop in a PDF, EPUB or text. The AI works out if it&apos;s a story, a guide or an article, finds the
-            characters, and gives each one a voice — with the emotion in every line.
+            Drop in a PDF, EPUB or text and press play. Voicebook finds the chapters, remembers where you stopped,
+            and keeps the audio on your device so it never has to be made twice.
           </p>
 
           {signedOut ? (
@@ -399,10 +435,9 @@ export default function Home() {
               )}
 
               <div className="status-list small">
-                <span className={cfg.providers.anthropic ? "ok" : "off"}>AI story analysis</span>
-                <span className={cfg.providers.elevenlabs ? "ok" : "off"}>ElevenLabs voices + FX</span>
-                <span className={cfg.providers.openai ? "ok" : "off"}>OpenAI voices</span>
-                <span className="ok">Ambience &amp; music</span>
+                <span className={cfg.providers.studio ? "ok" : "off"}>Studio voice</span>
+                <span className={cfg.providers.anthropic ? "ok" : "off"}>Characters &amp; emotions (AI key)</span>
+                <span className={cfg.providers.elevenlabs || cfg.providers.openai ? "ok" : "off"}>Acting voices (voice key)</span>
               </div>
             </>
           )}
@@ -442,7 +477,6 @@ export default function Home() {
                 {premium && currentScene && currentScene.ambience !== "none" && e.prefs.ambience && (
                   <span className="chip">{AMBIENCE_ICON[currentScene.ambience]} {currentScene.ambience}</span>
                 )}
-                {!e.aiUsed && e.aiUnavailable && <span className="chip warn">Basic mode (no AI analysis)</span>}
                 <button className={`chip link ${panel === "cast" ? "on" : ""}`} onClick={() => setPanel((p) => (p === "cast" ? "none" : "cast"))}>
                   🎭 {e.oneVoice ? "Voice" : `Voices (${e.characters.length + 1})`}
                 </button>
@@ -455,14 +489,40 @@ export default function Home() {
 
             {panel === "cast" && (
               <section className="cast card">
-                {e.builtinIsOptional && (
-                  <label className="toggle">
-                    <input type="checkbox" checked={e.builtinOn} onChange={(x) => e.setBuiltin(x.target.checked)} /> Built-in AI voices
-                    <span className="muted small">
-                      Experimental on phones: downloads about 90 MB once and needs a lot of memory. If the page closes itself, it will be switched off again automatically. English books only.
-                    </span>
-                  </label>
+                {e.provider === "studio" && (
+                  <div className="studio-info small">
+                    <p>
+                      <strong>Studio voice.</strong> Each passage is generated once on the server, then saved on this device,
+                      so replaying it is instant and works without a connection. It reads English.
+                    </p>
+                    {usage.limited && (
+                      <>
+                        <div className="meter" role="img" aria-label={`${Math.round(usage.fraction * 100)}% of this month's allowance used`}>
+                          <span style={{ width: `${Math.max(2, usage.fraction * 100)}%` }} />
+                        </div>
+                        <p className="muted">
+                          {usage.audioMinutes} min of new audio made this month on this device ({Math.round(usage.fraction * 100)}% of the
+                          free monthly allowance).
+                        </p>
+                      </>
+                    )}
+                    {e.savedPassages > 0 && (
+                      <p className="muted">
+                        {e.savedPassages} passages of this book are saved on this device.{" "}
+                        <button
+                          className="link-btn"
+                          onClick={() => confirm("Delete this book's saved audio from this device? It will be generated again when you listen.") && e.clearSavedAudio()}
+                        >
+                          Delete saved audio
+                        </button>
+                      </p>
+                    )}
+                  </div>
                 )}
+                <label className="toggle">
+                  <input type="checkbox" checked={e.prefs.singleVoice} onChange={(x) => e.setPrefs({ singleVoice: x.target.checked })} /> One voice reads everything
+                  <span className="muted small">The most natural. Turn off to give each character their own voice.</span>
+                </label>
                 {voices.length === 0 && <p className="muted small">No voices available for this engine on this device.</p>}
                 {e.provider === "browser" && voices.length > 0 && !voices.some((v) => v.name.startsWith("★")) && (
                   <p className="tip small">
@@ -475,10 +535,6 @@ export default function Home() {
                 )}
                 {deviceVoices && voices.length > 0 && (
                   <div className="device-opts">
-                    <label className="toggle">
-                      <input type="checkbox" checked={e.prefs.singleVoice} onChange={(x) => e.setPrefs({ singleVoice: x.target.checked })} /> One voice reads everything
-                      <span className="muted small">The most natural. Turn off to give each character their own voice.</span>
-                    </label>
                     <label className="slider">Emotion strength <span className="muted small">{["flat", "gentle", "normal", "strong", "dramatic"][Math.round(e.prefs.expressiveness * 2)]}</span>
                       <input type="range" min={0} max={2} step={0.5} value={e.prefs.expressiveness} onChange={(x) => e.setPrefs({ expressiveness: Number(x.target.value) })} />
                     </label>
@@ -510,19 +566,16 @@ export default function Home() {
                           {e.previewing === name ? <span className="spinner inline" /> : "▶"}
                         </button>
                         <select
-                          className={deviceVoices ? "span2" : ""}
+                          className={actingVoices ? "" : "span2"}
                           value={e.casting[name] ?? ""}
                           onChange={(x) => e.setVoice(name, x.target.value)}
                           aria-label={`Voice for ${name}`}
                         >
-                          {voiceGroups.map((g) => {
-                            const opts = g.voices.map((v) => (
-                              <option key={v.id} value={v.id}>{v.name}{v.gender !== "neutral" ? ` (${v.gender[0].toUpperCase()})` : ""}</option>
-                            ));
-                            return g.label ? <optgroup key={g.label} label={g.label}>{opts}</optgroup> : opts;
-                          })}
+                          {voices.map((v) => (
+                            <option key={v.id} value={v.id}>{v.name}{v.gender !== "neutral" ? ` (${v.gender[0].toUpperCase()})` : ""}</option>
+                          ))}
                         </select>
-                        {!deviceVoices && (
+                        {actingVoices && (
                           <select value={e.accents[name] ?? ""} onChange={(x) => e.setAccent(name, x.target.value)} aria-label={`Accent for ${name}`}>
                             {ACCENTS.map((a) => <option key={a} value={a}>{a ? `${premium ? "" : "🔒 "}${a} accent` : "Default accent"}</option>)}
                           </select>
@@ -558,12 +611,26 @@ export default function Home() {
                   </div>
                 ) : (
                   <>
-                    <label className="toggle"><input type="checkbox" checked={e.prefs.ambience} onChange={(x) => e.setPrefs({ ambience: x.target.checked })} /> Ambience <span className="muted small">rain, sea, fire, forest… chosen from the scene</span></label>
-                    <label className="toggle"><input type="checkbox" checked={e.prefs.music} onChange={(x) => e.setPrefs({ music: x.target.checked })} /> Background music <span className="muted small">follows the mood</span></label>
-                    <label className="toggle">
-                      <input type="checkbox" checked={e.prefs.sfx} disabled={!cfg.providers.elevenlabs} onChange={(x) => e.setPrefs({ sfx: x.target.checked })} /> Sound effects
-                      <span className="muted small">{cfg.providers.elevenlabs ? "thunder, doors, footsteps…" : "needs an ElevenLabs key"}</span>
+                    <label className="choice">
+                      <span>Background music</span>
+                      <select value={e.prefs.music} onChange={(x) => e.setPrefs({ music: x.target.value as keyof typeof MUSIC_LABEL })} aria-label="Background music">
+                        {(Object.keys(MUSIC_LABEL) as (keyof typeof MUSIC_LABEL)[]).map((m) => <option key={m} value={m}>{MUSIC_LABEL[m]}</option>)}
+                      </select>
+                      <span className="muted small">
+                        {e.prefs.music === "moments"
+                          ? "Comes in when a chapter opens, the mood changes or a line is intense, then fades away."
+                          : e.prefs.music === "always"
+                            ? "Plays under the whole story, following the mood."
+                            : "No music."}
+                      </span>
                     </label>
+                    <label className="toggle"><input type="checkbox" checked={e.prefs.ambience} onChange={(x) => e.setPrefs({ ambience: x.target.checked })} /> Scene sounds <span className="muted small">rain, sea, fire, forest… set the scene, then settle into the background</span></label>
+                    {cfg.providers.elevenlabs && (
+                      <label className="toggle">
+                        <input type="checkbox" checked={e.prefs.sfx} onChange={(x) => e.setPrefs({ sfx: x.target.checked })} /> Sound effects
+                        <span className="muted small">thunder, doors, footsteps… when the story calls for them</span>
+                      </label>
+                    )}
                     <label className="slider">Background volume
                       <input type="range" min={0} max={1} step={0.05} value={e.prefs.bgVolume} onChange={(x) => e.setPrefs({ bgVolume: Number(x.target.value) })} />
                     </label>
@@ -574,26 +641,31 @@ export default function Home() {
 
             <article className="reader">
               {e.segments.length === 0 && (
-                <p className="muted center-text"><span className="spinner inline" /> Analysing the text, finding characters and emotions…</p>
+                <p className="muted center-text"><span className="spinner inline" /> Opening this part of the book…</p>
               )}
               {e.segments.map((s, i) => {
                 const prev = e.segments[i - 1];
-                const chapterStart = e.chapters.find((c) => c.chunk === s.chunk);
-                const newPart = (i === 0 || prev.chunk !== s.chunk) && chapterStart && !s.text.startsWith(chapterStart.title.split(" — ")[0]);
-                const active = i === e.index || (e.playing && i > e.index && i <= e.groupEnd);
+                const firstOfPart = i === 0 || prev.chunk !== s.chunk;
+                const chapterStart = firstOfPart ? e.chapters.find((c) => c.chunk === s.chunk) : undefined;
+                // Show the chapter name unless the text itself opens with it.
+                const named = chapterStart?.title.split(" — ")[0] ?? "";
+                const newPart = chapterStart && !e.segments.slice(i, i + 3).some((x) => x.chunk === s.chunk && x.text.startsWith(named));
+                const heading = e.isHeading(s);
+                const active = i >= e.index && i <= e.groupEnd;
                 return (
                   <span key={s.id}>
                     {newPart && <span className="part-break" aria-hidden>{chapterStart.title}</span>}
+                    {s.para && !firstOfPart && !heading && <span className="para-break" aria-hidden />}
                     <span
                       ref={i === e.index ? activeRef : undefined}
-                      className={`seg ${active ? "active" : ""} ${s.speaker !== "Narrator" ? "dialogue" : ""}`}
-                      style={s.speaker !== "Narrator" ? { ["--c" as string]: speakerColor(s.speaker) } : undefined}
+                      className={`seg ${active ? "active" : ""} ${heading ? "heading" : ""} ${cast && s.speaker !== "Narrator" ? "dialogue" : ""}`}
+                      style={cast && s.speaker !== "Narrator" ? { ["--c" as string]: speakerColor(s.speaker) } : undefined}
                       onClick={() => e.jump(i)}
-                      title={`${s.speaker} · ${s.emotion}${s.delivery ? ` · ${s.delivery}` : ""}${s.sfx ? ` · 🔊 ${s.sfx}` : ""}`}
+                      title={cast ? `${s.speaker} · ${s.emotion}${s.delivery ? ` · ${s.delivery}` : ""}${s.sfx ? ` · 🔊 ${s.sfx}` : ""}` : undefined}
                     >
-                      {s.speaker !== "Narrator" && <span className="who">{s.speaker}{EMOTION_ICON[s.emotion] ? ` ${EMOTION_ICON[s.emotion]}` : ""}</span>}
-                      {s.sfx && premium && e.prefs.sfx && <span className="sfx">🔊</span>}
-                      {s.text}
+                      {cast && s.speaker !== "Narrator" && <span className="who">{s.speaker}{EMOTION_ICON[s.emotion] ? ` ${EMOTION_ICON[s.emotion]}` : ""}</span>}
+                      {s.sfx && premium && e.prefs.sfx && cfg.providers.elevenlabs && <span className="sfx">🔊</span>}
+                      {!cast && s.quote ? `${s.quote & 1 ? "“" : ""}${s.text}${s.quote & 2 ? "”" : ""}` : s.text}
                     </span>{" "}
                   </span>
                 );
@@ -612,31 +684,28 @@ export default function Home() {
             {e.error && (
               <p className="error small">
                 {e.error}
-                {e.availableProviders().length > 1 && <> — try another voice engine at the top.</>}
               </p>
             )}
             <div className="now muted small">
-              {current ? (
+              {e.waitMessage ? (
+                <span className="dl">{e.waitMessage}{waitedFor >= 3 ? ` ${waitedFor}s` : ""}</span>
+              ) : current ? (
                 <>
-                  <span className="dot" style={{ background: speakerColor(current.speaker) }} /> {current.speaker}
-                  {current.emotion !== "neutral" && <> · {current.emotion}</>}
-                  <span className="sep">·</span>
+                  {!e.oneVoice && <><span className="dot" style={{ background: speakerColor(current.speaker) }} /> {current.speaker}<span className="sep">·</span></>}
                   <button className="link-btn" onClick={() => setSidebar(true)}>{e.chapters[chapterIdx]?.title ?? `part ${current.chunk + 1}`}</button>
+                  <span className="sep">·</span>{Math.round(progress * 100)}%
                 </>
               ) : "Getting ready…"}
-              {e.provider === "builtin" && e.builtin.progress !== null && !e.builtin.ready && (
-                <span className="dl"> · downloading voice pack {Math.round(e.builtin.progress * 100)}% (one time)</span>
-              )}
             </div>
             <div className="controls">
               <select className="speed" value={e.rate} onChange={(x) => e.setRate(Number(x.target.value))} aria-label="Speed">
                 {SPEEDS.map((s) => <option key={s} value={s}>{s}×</option>)}
               </select>
-              <button className="icon" onClick={() => e.jump(e.index - 1)} aria-label="Previous">⏮</button>
+              <button className="icon" onClick={() => e.previous()} aria-label="Previous">⏮</button>
               <button className="play" onClick={() => e.toggle()} disabled={e.segments.length === 0} aria-label={e.playing ? "Pause" : "Play"}>
                 {e.buffering ? <span className="spinner" /> : e.playing ? "❚❚" : "▶"}
               </button>
-              <button className="icon" onClick={() => e.jump(e.index + 1)} aria-label="Next">⏭</button>
+              <button className="icon" onClick={() => e.next()} aria-label="Next">⏭</button>
               <button className="icon small-icon" onClick={() => setSidebar(true)} aria-label="Chapters">☰</button>
             </div>
           </footer>
@@ -656,7 +725,7 @@ export default function Home() {
               <li>🔊 Sound effects when the story calls for them</li>
             </ul>
             {cfg.mode === "open" ? (
-              <p className="muted small">Everything is unlocked. Lifelike AI voices need a voice API key (ElevenLabs or OpenAI) on the server.</p>
+              <p className="muted small">Everything is unlocked. Acting voices with emotions need a voice key (ElevenLabs or OpenAI) on the server.</p>
             ) : cfg.billing ? (
               <button className="btn primary wide" onClick={startCheckout}>{cfg.user ? "Upgrade now" : "Sign in to upgrade"}</button>
             ) : (
