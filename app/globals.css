@@ -261,3 +261,17 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 
 .seg.heading { display: block; font-size: 1.25em; line-height: 1.35; margin: 1.1em 0 0.5em; color: var(--ink); }
 .seg.heading:first-child { margin-top: 0.2em; }
+
+/* On-device voice: size picker */
+.ondevice .field { display: grid; gap: 6px; margin: 10px 0 4px; }
+.ondevice .field span { color: var(--ink-dim); }
+.ondevice .field select { width: 100%; }
+.tiers { display: grid; gap: 8px; margin: 10px 0; }
+.tier { display: grid; gap: 4px; text-align: left; padding: 12px; border-radius: 12px; border: 1px solid #ffffff22; background: #ffffff08; color: inherit; font: inherit; line-height: 1.45; cursor: pointer; }
+.tier.chosen { border-color: var(--accent); background: #f0a35e14; }
+.tier:disabled { opacity: 0.5; cursor: not-allowed; }
+.tier-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.badge { font-size: 0.8em; padding: 1px 8px; border-radius: 999px; background: var(--accent); color: var(--accent-ink); }
+.badge.ok { background: #5ec27a33; color: #9fe0b0; }
+.tier .warn { color: #f0c27e; }
+.btn.small-btn { margin-top: 4px; }

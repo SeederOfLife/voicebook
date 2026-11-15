@@ -3,7 +3,7 @@
 // keeps the generated audio on the device, remembers your place, and drives the
 // background sound.
 import { splitSentences } from "./chunk";
-import { BUILTIN_VOICES, BuiltinVoices, builtinSupported } from "./builtin";
+import { BuiltinVoices, builtinSupported, type DeviceKind, type Tier } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
 import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
@@ -267,6 +267,7 @@ export class ReaderEngine {
     this.audio = new Audio();
     this.audio.preload = "auto";
     this.builtin = new BuiltinVoices(onChange);
+    if (this.builtin.notice) this.notice = this.builtin.notice;
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;
     try {
@@ -528,7 +529,7 @@ export class ReaderEngine {
 
   voicesFor(p: Provider = this.provider): VoiceOption[] {
     if (p === "studio") return STUDIO_VOICES;
-    if (p === "builtin") return BUILTIN_VOICES;
+    if (p === "builtin") return this.builtin.voices;
     if (p === "openai") return this.config?.voices.openai ?? [];
     if (p === "elevenlabs") return this.config?.voices.elevenlabs ?? [];
     // Device voices: only the best-quality reading voices. English first; another
@@ -728,7 +729,8 @@ export class ReaderEngine {
 
   private keyOf(provider: Provider, voice: string, text: string, tailMs: number, seg: Segment): string {
     if (provider === "studio") return `studio|${voice}|${tailMs}|${hash53(text)}`;
-    if (provider === "builtin" || provider === "browser") return `${provider}|${voice}|${hash53(text)}`;
+    if (provider === "builtin") return `builtin-${this.builtin.tier}|${voice}|${hash53(text)}`;
+    if (provider === "browser") return `${provider}|${voice}|${hash53(text)}`;
     // Acting voices: everything that changes the performance is part of the identity.
     const acting = [seg.emotion, seg.delivery ?? "", (seg.tags ?? []).join(","), seg.intensity ?? 1, this.accents[seg.speaker] ?? ""].join("~");
     return `${provider}|${voice}|${hash53(`${text}\u0000${acting}`)}`;
@@ -793,7 +795,7 @@ export class ReaderEngine {
   }
 
   private async generate(provider: Provider, p: Passage, lookAhead: boolean, epoch: number): Promise<Blob> {
-    if (provider === "builtin") return this.builtin.generate(p.text, p.voice || "af_heart", 1);
+    if (provider === "builtin") return this.builtin.generate(p.text, p.voice, 1);
     if (provider === "studio") return this.studioSlot(() => this.studioRequest(p), lookAhead, epoch);
 
     const seg = p.seg;
@@ -880,7 +882,7 @@ export class ReaderEngine {
     } catch (e) {
       const err = e instanceof VoiceError ? e : new VoiceError("server", e instanceof Error ? e.message : String(e));
       this.studioDown = { kind: err.kind, why: err.message, since: Date.now() };
-      const standIn = builtinSupported() ? "the same voice is made on this computer" : "your device's own voice fills in";
+      const standIn = this.builtin.available ? "the on-device AI voice fills in" : "your device's own voice fills in";
       this.notice =
         err.kind === "limit"
           ? `This month's free studio-voice allowance is used up on this device. Passages already saved still play in the studio voice; for new ones ${standIn} until next month.`
@@ -1076,12 +1078,34 @@ export class ReaderEngine {
     this.loadedKey = "";
     if (remember && p === "studio" && this.studioDown?.kind !== "limit") this.studioDown = null; // choosing it again = try again now
     if (remember) store.set(ENGINE_KEY, p);
-    if (p === "builtin") this.builtin.warm();
+    if (p === "builtin") this.builtin.warm(this.casting.Narrator);
     this.casting = this.castingByProvider[p] ?? {};
     this.recast();
     this.snap(this.index);
     this.saveBookState();
     this.onChange();
+  }
+
+  /** Choose the size ("power") of the on-device voice. */
+  setBuiltinTier(t: Tier) {
+    if (t === this.builtin.tier) return;
+    const wasPlaying = this.playing && this.provider === "builtin";
+    if (this.provider === "builtin") this.pause();
+    this.epoch++;
+    this.loadedKey = "";
+    this.builtin.setTier(t);
+    if (this.provider === "builtin") {
+      this.recast();
+      this.snap(this.index);
+      this.saveBookState();
+      this.builtin.warm(this.casting.Narrator);
+      if (wasPlaying) this.play();
+    }
+    this.onChange();
+  }
+
+  setDeviceKind(k: DeviceKind) {
+    this.builtin.setDevice(k);
   }
 
   setVoice(speaker: string, voiceId: string) {
@@ -1113,9 +1137,11 @@ export class ReaderEngine {
       return this.studioReady ? "Preparing the next passage…" : "Warming up the studio voice. The first time can take up to a minute…";
     }
     if (this.provider === "builtin" || this.provider === "studio") {
-      return this.builtin.ready
-        ? "Generating the voice on this computer…"
-        : `Downloading the voice to this computer… ${Math.round((this.builtin.progress ?? 0) * 100)}%`;
+      if (this.builtin.ready) return "Making the voice on this device…";
+      const pct = Math.round((this.builtin.progress ?? 0) * 100);
+      return pct >= 100 || this.builtin.available
+        ? "Getting the voice ready on this device…"
+        : `Downloading the voice to this device (${this.builtin.tier === "light" ? "63" : this.builtin.tier === "best" ? "326" : "92"} MB, only once)… ${pct}%`;
     }
     return "Preparing the voice…";
   }
@@ -1134,7 +1160,7 @@ export class ReaderEngine {
     if (this.provider !== "builtin" || !this.browserVoices.length) return false;
     const why = e instanceof Error ? e.message : String(e);
     this.setProvider("browser", false);
-    this.notice = `The voice couldn't be made on this computer (${why}), so your device's own voice is reading.`;
+    this.notice = `The on-device AI voice couldn't run (${why}), so your device's own voice is reading.`;
     return true;
   }
 
@@ -1144,10 +1170,10 @@ export class ReaderEngine {
    * the chosen engine, so saved passages keep playing and it is tried again later.
    */
   private async standIn(p: Passage, t: number): Promise<boolean> {
-    if (builtinSupported()) {
+    if (this.builtin.available) {
       try {
         this.onChange();
-        const blob = await this.builtin.generate(p.text, p.voice || "af_heart", 1);
+        const blob = await this.builtin.generate(p.text, p.voice, 1);
         if (t !== this.token) return true;
         await this.startAudio(URL.createObjectURL(blob), p, t, "builtin");
         return true;

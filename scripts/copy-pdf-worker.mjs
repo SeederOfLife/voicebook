@@ -14,13 +14,18 @@ if (!src) {
   console.warn("[copy-pdf-worker] pdf.js worker not found, skipping");
   process.exit(0);
 }
-mkdirSync(join(root, "public/voice"), { recursive: true });
+mkdirSync(join(root, "public/voice/piper"), { recursive: true });
 
 // Built-in AI voices: the engine and its WebAssembly runtime, served from this site.
 for (const [from, to] of [
   ["node_modules/kokoro-js/dist/kokoro.web.js", "public/voice/kokoro.web.js"],
   ["node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.mjs", "public/voice/ort-wasm-simd-threaded.jsep.mjs"],
   ["node_modules/@huggingface/transformers/dist/ort-wasm-simd-threaded.jsep.wasm", "public/voice/ort-wasm-simd-threaded.jsep.wasm"],
+  // The light on-device voice (Piper): its own small runtime and the espeak-ng phonemizer.
+  ["node_modules/onnxruntime-web/dist/ort.wasm.min.mjs", "public/voice/piper/ort.wasm.min.mjs"],
+  ["node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs", "public/voice/piper/ort-wasm-simd-threaded.mjs"],
+  ["node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm", "public/voice/piper/ort-wasm-simd-threaded.wasm"],
+  ["node_modules/phonemizer/dist/phonemizer.js", "public/voice/piper/phonemizer.js"],
 ]) {
   if (existsSync(join(root, from))) copyFileSync(join(root, from), join(root, to));
   else console.warn("[copy-assets] missing", from);

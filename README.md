@@ -128,3 +128,15 @@ npm run dev                  # http://localhost:3000
 | Change ambience/music sounds | `lib/soundscape.ts` |
 | Change what Free vs Premium gets | `lib/access.ts`, `app/api/tts/route.ts`, `lib/engine.ts` |
 | Change the look | `app/globals.css`, `app/page.tsx` |
+
+## The on-device AI voice (three sizes)
+
+Choose **On-device AI voice** in the engine menu. The voice is made by the listener's own device, so after one download it works offline and has no monthly limit. The app checks the device (phone or computer, memory, processor cores, graphics chip and a short speed test), lets the listener say which device it is, and suggests a size:
+
+| Size | Download | Model | For |
+|---|---|---|---|
+| Light | 63 MB per voice | Piper (medium) | phones, tablets, older computers |
+| Balanced | 92 MB | Kokoro v1.0, 8-bit | recent computers (experimental on recent phones) |
+| Best | 326 MB | Kokoro v1.0, full precision, WebGPU when available | powerful computers |
+
+Voices are downloaded from Hugging Face once and kept in the browser's storage ("Delete downloaded voices" removes them). On phones, if the page closes while a bigger size loads, the app goes back to Light by itself next time.

@@ -1,23 +1,45 @@
-// Built-in AI voices: the Kokoro neural voice model running fully inside the browser.
-// The code is served by this site; the voice pack (~90 MB) is downloaded once from
-// Hugging Face and then cached by the browser. No API key, no cost per use.
+// On-device studio voice: the Kokoro neural voice model running fully inside the browser.
+// Two sizes, chosen in the app: "balanced" (compressed, ~92 MB) and "best" (full
+// precision, ~326 MB, the same quality as the server; uses the graphics chip through
+// WebGPU when the browser offers it). The code is served by this site; the voice is
+// downloaded once from Hugging Face and then kept by the browser.
 import { KokoroTTS, env } from "./kokoro.web.js";
 
 env.wasmPaths = new URL("./", import.meta.url).href;
+const tier = new URL(self.location.href).searchParams.get("tier") === "best" ? "best" : "balanced";
 
-let ttsPromise = null;
-function load() {
-  ttsPromise ??= KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
-    dtype: "q8",
-    device: "wasm",
+async function create(device) {
+  return KokoroTTS.from_pretrained("onnx-community/Kokoro-82M-v1.0-ONNX", {
+    dtype: tier === "best" ? "fp32" : "q8",
+    device,
     progress_callback: (p) => {
       if (p.status === "progress" && /\.onnx$/.test(p.file ?? "") && p.total)
         self.postMessage({ type: "progress", progress: p.loaded / p.total });
     },
-  }).then((tts) => {
-    self.postMessage({ type: "ready" });
-    return tts;
   });
+}
+
+let ttsPromise = null;
+function load() {
+  ttsPromise ??= (async () => {
+    let device = "wasm";
+    let tts = null;
+    if (tier === "best" && self.navigator?.gpu) {
+      try {
+        const adapter = await navigator.gpu.requestAdapter();
+        if (adapter) {
+          tts = await create("webgpu");
+          await tts.generate("Hi.", { voice: "af_heart" }); // fails here if the graphics chip can't run it
+          device = "webgpu";
+        }
+      } catch {
+        tts = null;
+      }
+    }
+    tts ??= await create("wasm");
+    self.postMessage({ type: "ready", device });
+    return tts;
+  })();
   ttsPromise.catch(() => (ttsPromise = null));
   return ttsPromise;
 }

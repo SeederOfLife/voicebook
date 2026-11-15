@@ -15,6 +15,7 @@
     "kokoro-js": "^1.2.1",
     "next": "^16.4.5",
     "onnxruntime-node": "1.21.0",
+    "onnxruntime-web": "1.22.0",
     "pdfjs-dist": "^6.5.438",
     "phonemizer": "^1.2.1",
     "react": "^19.3.1",

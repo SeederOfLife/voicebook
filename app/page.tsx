@@ -9,12 +9,13 @@ import { bookId, library, type BookRecord, type BookSummary } from "@/lib/librar
 import { getSupabase } from "@/lib/supabase-browser";
 import { ACCENTS, type AppConfig, type Provider } from "@/lib/types";
 import { hash } from "@/lib/voices";
+import { DEVICE_KINDS, TIERS, TIER_ORDER, type DeviceKind, type Tier } from "@/lib/builtin";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
   studio: "Studio voice",
   elevenlabs: "ElevenLabs · acting voices",
   openai: "OpenAI · acting voices",
-  builtin: "Studio voice · made on this computer",
+  builtin: "On-device AI voice",
   browser: "Device voice · basic",
 };
 
@@ -519,6 +520,7 @@ export default function Home() {
                     )}
                   </div>
                 )}
+                {e.provider === "builtin" && <OnDevicePanel e={e} />}
                 <label className="toggle">
                   <input type="checkbox" checked={e.prefs.singleVoice} onChange={(x) => e.setPrefs({ singleVoice: x.target.checked })} /> One voice reads everything
                   <span className="muted small">The most natural. Turn off to give each character their own voice.</span>
@@ -762,5 +764,93 @@ export default function Home() {
         </div>
       )}
     </main>
+  );
+}
+
+/** Pick the size ("power") of the on-device voice that this device can carry. */
+function OnDevicePanel({ e }: { e: ReaderEngine }) {
+  const b = e.builtin;
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    if (!b.check && !checking) {
+      setChecking(true);
+      void b.runCheck().finally(() => setChecking(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const advice = b.advice;
+  const pct = Math.round((b.progress ?? 0) * 100);
+  return (
+    <div className="studio-info small ondevice">
+      <p>
+        <strong>On-device AI voice.</strong> Made by your own device, so after one download it works anywhere, even offline, with no
+        monthly limit. Pick the size your device can carry.
+      </p>
+      {b.notice && <p className="tip">{b.notice}</p>}
+      <label className="field">
+        <span>This device</span>
+        <select value={b.device} onChange={(x) => e.setDeviceKind(x.target.value as DeviceKind)}>
+          {DEVICE_KINDS.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="muted">
+        {checking ? "Checking this device…" : b.check ? <>Detected: {b.check.summary}.</> : null}{" "}
+        <button className="link-btn" disabled={checking} onClick={() => { setChecking(true); void b.runCheck().finally(() => setChecking(false)); }}>
+          Check again
+        </button>
+      </p>
+      <div className="tiers" role="radiogroup" aria-label="Voice size">
+        {TIER_ORDER.map((t: Tier) => {
+          const info = TIERS[t];
+          const blocked = advice.blocked[t];
+          const chosen = b.tier === t;
+          return (
+            <button
+              key={t}
+              role="radio"
+              aria-checked={chosen}
+              disabled={!!blocked}
+              className={`tier${chosen ? " chosen" : ""}`}
+              onClick={() => e.setBuiltinTier(t)}
+            >
+              <span className="tier-head">
+                <strong>{info.name}</strong>
+                <span className="muted">{info.mb} MB</span>
+                {advice.recommended === t && <span className="badge">Suits this device</span>}
+                {b.stored.has(t) && <span className="badge ok">Downloaded</span>}
+              </span>
+              <span className="muted">{info.blurb}</span>
+              {blocked && <span className="warn">{blocked}</span>}
+              {!blocked && advice.caution[t] && <span className="warn">{advice.caution[t]}</span>}
+            </button>
+          );
+        })}
+      </div>
+      {b.progress !== null && !b.ready && pct < 100 && (
+        <>
+          <div className="meter" role="img" aria-label={`Downloading ${pct}%`}>
+            <span style={{ width: `${Math.max(2, pct)}%` }} />
+          </div>
+          <p className="muted">Downloading the {TIERS[b.tier].name} voice… {pct}% (only once; keep this page open)</p>
+        </>
+      )}
+      {b.ready && <p className="muted">✓ Ready{b.runsOn === "webgpu" ? " · running on the graphics chip" : ""}.</p>}
+      {!b.ready && b.progress === null && (
+        <button className="btn small-btn" onClick={() => b.warm(e.casting.Narrator)}>
+          {b.stored.has(b.tier) ? "Get it ready" : `Download the ${TIERS[b.tier].name} voice (${TIERS[b.tier].mb} MB)`}
+        </button>
+      )}
+      {b.stored.size > 0 && (
+        <p className="muted">
+          <button className="link-btn" onClick={() => confirm("Delete the downloaded on-device voices from this device?") && void b.deleteDownloads()}>
+            Delete downloaded voices
+          </button>
+        </p>
+      )}
+    </div>
   );
 }
