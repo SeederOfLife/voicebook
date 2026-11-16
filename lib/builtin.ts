@@ -151,7 +151,10 @@ export class BuiltinVoices {
   notice: string | null = null;
   private worker: Worker | null = null;
   private loadedVoice = "";
-  private pending = new Map<number, { resolve: (audio: Blob) => void; reject: (e: Error) => void }>();
+  private pending = new Map<number, { resolve: (audio: Blob) => void; reject: (e: Error) => void; chars: number }>();
+  /** What the worker was doing last (shown if it gets stuck). */
+  private stage = "starting";
+  private watchdog: ReturnType<typeof setTimeout> | null = null;
   private seq = 0;
 
   constructor(private onChange: () => void) {
@@ -241,7 +244,23 @@ export class BuiltinVoices {
     await this.refreshStored();
   }
 
+  /** (Re)arm the stuck-detector: if the worker says nothing for `seconds`, stop it. */
+  private arm(seconds: number | null) {
+    if (this.watchdog) clearTimeout(this.watchdog);
+    this.watchdog = null;
+    if (seconds === null) return;
+    this.watchdog = setTimeout(() => {
+      const tier = this.tier;
+      const why = `it got stuck while ${this.stage}`;
+      write(LOADING_KEY, null);
+      this.stop(new Error(`the ${TIERS[tier].name} voice is too slow or blocked on this device (${why})`));
+      this.notice = `The ${TIERS[tier].name} on-device voice got stuck on this device (${why}).`;
+      this.onChange();
+    }, seconds * 1000);
+  }
+
   private stop(err: Error) {
+    this.arm(null);
     this.worker?.terminate();
     this.worker = null;
     this.ready = false;
@@ -260,8 +279,20 @@ export class BuiltinVoices {
     this.progress = this.stored.has(tier) ? 1 : 0;
     w.onmessage = (ev) => {
       const m = ev.data;
+      if (m.type === "stage") {
+        this.stage = m.stage;
+        if (!this.ready) this.arm(60); // opening + first word after the download
+        return;
+      }
+      if (m.type === "start") {
+        const job = this.pending.get(m.id);
+        // Generous: about 4× slower than real time is still accepted.
+        this.arm(job ? 60 + job.chars * 0.3 : 120);
+        return;
+      }
       if (m.type === "progress") {
         this.progress = Math.max(this.progress ?? 0, m.progress);
+        this.arm(null); // downloading: no time limit, the connection may be slow
         return this.onChange();
       }
       if (m.type === "ready") {
@@ -269,6 +300,8 @@ export class BuiltinVoices {
         this.progress = 1;
         this.runsOn = m.device ?? null;
         this.stored.add(tier);
+        const longest = Math.max(0, ...[...this.pending.values()].map((j) => j.chars));
+        this.arm(this.pending.size ? 60 + longest * 0.3 : null);
         return this.onChange();
       }
       if (m.type === "error") {
@@ -282,6 +315,7 @@ export class BuiltinVoices {
       const p = this.pending.get(m.id);
       if (!p) return;
       this.pending.delete(m.id);
+      this.arm(null);
       if (m.error) p.reject(new Error(`could not make the voice on this device: ${m.error}`));
       else {
         write(LOADING_KEY, null); // it worked: this size is fine here
@@ -322,7 +356,7 @@ export class BuiltinVoices {
     }
     if (!this.worker && !this.stored.has(this.tier)) write(LOADING_KEY, this.tier);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, chars: text.length });
       this.start().postMessage({ id, text, voice: v, speed });
     });
   }

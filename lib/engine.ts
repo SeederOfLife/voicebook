@@ -1157,8 +1157,15 @@ export class ReaderEngine {
 
   /** The on-computer voice can't deliver: carry on with the device's own voice. False if there is none. */
   private fallBack(e: unknown): boolean {
-    if (this.provider !== "builtin" || !this.browserVoices.length) return false;
+    if (this.provider !== "builtin") return false;
     const why = e instanceof Error ? e.message : String(e);
+    // Prefer the studio voice (online, best quality) when it can be used.
+    if (this.availableProviders().includes("studio") && !this.studioUsedUp && !(this.studioDown && Date.now() - this.studioDown.since < RETRY_MS)) {
+      this.setProvider("studio", false);
+      this.notice = `The on-device AI voice couldn't run (${why}), so the studio voice is reading instead (needs a connection).`;
+      return true;
+    }
+    if (!this.browserVoices.length) return false;
     this.setProvider("browser", false);
     this.notice = `The on-device AI voice couldn't run (${why}), so your device's own voice is reading.`;
     return true;

@@ -12,7 +12,9 @@ const PARAGRAPH_PAUSE = 0.6;
 
 ort.env.wasm.wasmPaths = new URL("./piper/", import.meta.url).href;
 const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent);
-ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(mobile ? 2 : 4, navigator.hardwareConcurrency || 1)) : 1;
+// Phones run on one core: several cores inside a worker can freeze on iPhone (WebKit).
+ort.env.wasm.numThreads = !mobile && self.crossOriginIsolated ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) : 1;
+const stage = (name) => self.postMessage({ type: "stage", stage: name });
 
 /** "en_US-lessac-medium" → its two files on Hugging Face. */
 function filesOf(voice) {
@@ -63,8 +65,12 @@ function load(voice) {
     const files = filesOf(voice);
     const config = JSON.parse(new TextDecoder().decode(await fetchCached(files.config)));
     const model = await fetchCached(files.model, (p) => self.postMessage({ type: "progress", progress: p }));
+    stage("opening the voice");
     const session = await ort.InferenceSession.create(model, { executionProviders: ["wasm"], graphOptimizationLevel: "all" });
-    self.postMessage({ type: "ready" });
+    // Say one word before announcing "ready", so "ready" means it really works here.
+    const t0 = performance.now();
+    await speak({ session, config }, "Hello.", 1);
+    self.postMessage({ type: "ready", device: "wasm", testMs: Math.round(performance.now() - t0) });
     return { session, config };
   })();
   current = { voice, promise };
@@ -138,6 +144,7 @@ async function speak(model, text, speed) {
   for (let pi = 0; pi < paragraphs.length; pi++) {
     const list = sentences(paragraphs[pi]);
     for (let si = 0; si < list.length; si++) {
+      stage("reading the words");
       const ph = await phonemesOf(list[si], lang);
       const ids = idsOf(ph, config.phoneme_id_map);
       if (ids.length < 4) continue;
@@ -147,6 +154,7 @@ async function speak(model, text, speed) {
         scales: new ort.Tensor("float32", Float32Array.from([inf.noise_scale ?? 0.667, (inf.length_scale ?? 1) / (speed || 1), inf.noise_w ?? 0.8]), [3]),
       };
       if (session.inputNames.includes("sid")) feeds.sid = new ort.Tensor("int64", BigInt64Array.from([0n]), [1]);
+      stage("making the sound");
       const result = await session.run(feeds);
       parts.push(result[session.outputNames[0]].data);
       const last = si === list.length - 1;
@@ -180,6 +188,7 @@ self.onmessage = (ev) => {
   if (m.type === "load") return void load(m.voice).catch((e) => self.postMessage({ type: "error", error: String(e?.message ?? e) }));
   queue = queue.then(async () => {
     try {
+      self.postMessage({ type: "start", id: m.id });
       const model = await load(m.voice);
       const buffer = await speak(model, m.text, m.speed);
       self.postMessage({ id: m.id, buffer }, [buffer]);
