@@ -300,3 +300,5 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .cast-found p { margin: 0; }
 .cast-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .cast-chip { padding: 3px 10px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--c) 50%, transparent); background: color-mix(in srgb, var(--c) 12%, transparent); }
+.install-card { margin-top: 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid #f0a35e55; background: #f0a35e10; display: grid; gap: 8px; }
+.install-card p { margin: 0; }

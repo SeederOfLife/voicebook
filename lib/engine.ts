@@ -1027,6 +1027,15 @@ export class ReaderEngine {
    * Play silence on the player. Looped while audio is being prepared, so a phone with
    * its screen off keeps the page running until the passage is ready.
    */
+  private gaps = new Map<number, string>();
+  /** A short silence (rounded to 50 ms), made once and reused. */
+  private gapUrl(ms: number): string {
+    const k = Math.max(50, Math.round(ms / 50) * 50);
+    let u = this.gaps.get(k);
+    if (!u) this.gaps.set(k, (u = silentWavUrl(k / 1000)));
+    return u;
+  }
+
   private holdAudioSession(loop = true) {
     if (!this.unlocked || (loop && this.provider === "browser")) return;
     this.silent ||= silentWavUrl(6);
@@ -1390,10 +1399,20 @@ export class ReaderEngine {
         ? 0
         : (this.pauseAfter(last, this.segments[this.index]) * (this.spokenBy === "browser" ? this.prefs.pauses : 0.6)) / Math.max(0.75, this.rate);
     const t = this.token;
-    if (gap) {
-      this.onChange();
-      setTimeout(() => this.playing && t === this.token && this.playCurrent(), gap);
-    } else this.playCurrent();
+    if (!gap) return void this.playCurrent();
+    this.onChange();
+    if (this.spokenBy !== "browser" && this.unlocked) {
+      // The pause is played as silence on the player: timers are slowed down on a locked
+      // phone, but audio keeps its pace, so reading goes on with the screen off.
+      const a = this.audio;
+      a.loop = false;
+      a.onerror = () => t === this.token && this.playing && this.playCurrent();
+      a.onended = () => t === this.token && this.playing && this.playCurrent();
+      a.src = this.gapUrl(gap);
+      a.play().catch(() => setTimeout(() => this.playing && t === this.token && this.playCurrent(), gap));
+      return;
+    }
+    setTimeout(() => this.playing && t === this.token && this.playCurrent(), gap);
   }
 
   // ---------- voice preview ----------

@@ -127,6 +127,22 @@ export default function Home() {
     return c;
   }, []);
 
+  // Installable app + offline: register the service worker, catch Chrome's install prompt.
+  const [installEvt, setInstallEvt] = useState<{ prompt: () => Promise<unknown> } | null>(null);
+  const [installed, setInstalled] = useState(false);
+  useEffect(() => {
+    setInstalled(window.matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true);
+    if ("serviceWorker" in navigator && location.hostname !== "localhost") navigator.serviceWorker.register("/sw.js").catch(() => {});
+    const onPrompt = (ev: Event) => {
+      ev.preventDefault();
+      setInstallEvt(ev as unknown as { prompt: () => Promise<unknown> });
+    };
+    const onInstalled = () => { setInstalled(true); setInstallEvt(null); };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onInstalled);
+    return () => { window.removeEventListener("beforeinstallprompt", onPrompt); window.removeEventListener("appinstalled", onInstalled); };
+  }, []);
+
   useEffect(() => {
     const e = new ReaderEngine(() => setTick((t) => t + 1));
     engineRef.current = e;
@@ -423,6 +439,7 @@ export default function Home() {
                 <button className="btn" onClick={() => setShowPaste((s) => !s)}>Paste text</button>
                 <button className="btn" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>Try a sample story</button>
               </div>
+              {!installed && <InstallCard evt={installEvt} />}
               {showPaste && (
                 <div className="paste">
                   <textarea value={paste} onChange={(x) => setPaste(x.target.value)} placeholder="Paste any text here…" rows={8} />
@@ -952,6 +969,27 @@ function VoiceSheet({ e, speaker, onClose }: { e: ReaderEngine; speaker: string;
           })}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Invite to install Voicebook as an app on the phone (offline, keeps reading with the screen off). */
+function InstallCard({ evt }: { evt: { prompt: () => Promise<unknown> } | null }) {
+  const ios = typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent);
+  return (
+    <div className="install-card small">
+      <p>
+        <strong>📲 Put Voicebook on your phone</strong>
+        <br />
+        <span className="muted">Opens like an app, works offline with your saved books and downloaded voices, and keeps reading with the screen off.</span>
+      </p>
+      {evt ? (
+        <button className="btn primary" onClick={() => void evt.prompt()}>Install the app</button>
+      ) : (
+        <p className="muted">
+          {ios ? "In Safari: tap Share, then “Add to Home Screen”." : "In Chrome: tap ⋮ (top right), then “Install app” or “Add to Home screen”."}
+        </p>
+      )}
     </div>
   );
 }
