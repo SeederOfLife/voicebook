@@ -295,3 +295,4 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .seg.active { cursor: pointer; }
 .voice-sheet select { background: #ffffff0d; color: inherit; border: 1px solid #ffffff22; border-radius: 10px; padding: 8px 10px; font: inherit; }
 .voice-sheet select option { background: #221d18; color: #f3ead9; }
+.voice-group { margin: 10px 0 0; }

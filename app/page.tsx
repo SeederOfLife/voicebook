@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { buildBook, detectSections } from "@/lib/chunk";
 import { ReaderEngine } from "@/lib/engine";
@@ -575,9 +575,15 @@ export default function Home() {
                           onChange={(x) => e.setVoice(name, x.target.value)}
                           aria-label={`Voice for ${name}`}
                         >
-                          {voices.map((v) => (
-                            <option key={v.id} value={v.id}>{v.name}{v.gender !== "neutral" ? ` (${v.gender[0].toUpperCase()})` : ""}</option>
-                          ))}
+                          {[voices.filter((v) => !v.more), voices.filter((v) => v.more)].map((group, gi) =>
+                            group.length === 0 ? null : (
+                              <optgroup key={gi} label={gi ? "More voices" : "Best voices"}>
+                                {group.map((v) => (
+                                  <option key={v.id} value={v.id}>{v.name}{v.gender !== "neutral" ? ` (${v.gender[0].toUpperCase()})` : ""}</option>
+                                ))}
+                              </optgroup>
+                            ),
+                          )}
                         </select>
                         {actingVoices && (
                           <select value={e.accents[name] ?? ""} onChange={(x) => e.setAccent(name, x.target.value)} aria-label={`Accent for ${name}`}>
@@ -914,15 +920,17 @@ function VoiceSheet({ e, speaker, onClose }: { e: ReaderEngine; speaker: string;
         </label>
         <div className="voice-list">
           {voices.length === 0 && <p className="muted small">No voices for this kind on this device.</p>}
-          {voices.map((v) => {
+          {voices.map((v, i) => {
             const [name, ...rest] = v.name.replace(/^★\s*/, "").split(" · ");
-            return (
-              <button key={v.id} className={`voice-row${v.id === chosen ? " chosen" : ""}`} onClick={() => pick(v.id)}>
+            const header = v.more && !voices[i - 1]?.more;
+            return (<Fragment key={v.id}>
+              {header && <p className="muted small voice-group">More voices · a little less polished</p>}
+              <button className={`voice-row${v.id === chosen ? " chosen" : ""}`} onClick={() => pick(v.id)}>
                 <span className="voice-name">{name}</span>
                 <span className="muted small">{[rest.join(" · "), v.gender !== "neutral" ? v.gender : ""].filter(Boolean).join(" · ")}</span>
                 {v.id === chosen && <span className="tick" aria-label="chosen">{e.buffering ? <span className="spinner inline" /> : "✓"}</span>}
               </button>
-            );
+            </Fragment>);
           })}
         </div>
       </div>

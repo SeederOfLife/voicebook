@@ -108,6 +108,8 @@ export interface VoiceOption {
   useCase?: string;
   /** Novelty / robotic device voice: never cast automatically, but can be picked by hand */
   fun?: boolean;
+  /** Listed under "More voices": fine, but less polished than the main ones */
+  more?: boolean;
 }
 
 export interface AppConfig {

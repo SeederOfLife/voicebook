@@ -31,6 +31,23 @@ export const STUDIO_VOICES: VoiceOption[] = [
   { id: "af_sarah", name: "Sarah · American", gender: "female" },
   { id: "af_aoede", name: "Aoede · American", gender: "female" },
   { id: "bf_isabella", name: "Isabella · British", gender: "female" },
+  // More voices: less polished, still natural.
+  { id: "af_kore", name: "Kore · calm, American", gender: "female", more: true },
+  { id: "af_nova", name: "Nova · bright, American", gender: "female", more: true },
+  { id: "af_alloy", name: "Alloy · even, American", gender: "female", more: true },
+  { id: "af_sky", name: "Sky · light, American", gender: "female", more: true },
+  { id: "af_jessica", name: "Jessica · American", gender: "female", more: true },
+  { id: "af_river", name: "River · American", gender: "female", more: true },
+  { id: "bf_alice", name: "Alice · British", gender: "female", more: true },
+  { id: "bf_lily", name: "Lily · British", gender: "female", more: true },
+  { id: "am_adam", name: "Adam · American", gender: "male", more: true },
+  { id: "am_echo", name: "Echo · American", gender: "male", more: true },
+  { id: "am_eric", name: "Eric · American", gender: "male", more: true },
+  { id: "am_liam", name: "Liam · young, American", gender: "male", more: true },
+  { id: "am_onyx", name: "Onyx · low, American", gender: "male", more: true },
+  { id: "bm_daniel", name: "Daniel · British", gender: "male", more: true },
+  { id: "bm_lewis", name: "Lewis · British", gender: "male", more: true },
+  { id: "am_santa", name: "Santa · jolly (for fun)", gender: "male", more: true, fun: true },
 ];
 
 // Used only if the ElevenLabs voice list can't be fetched.
@@ -91,7 +108,7 @@ export function castVoices(
   for (const ch of characters) {
     if (ch.name === "Narrator" || result[ch.name]) continue;
     const fits = (g: Gender) => ch.gender === "neutral" || g === ch.gender || g === "neutral";
-    const pool = voices.filter((v) => fits(v.gender) && v.id !== result.Narrator);
+    const pool = voices.filter((v) => fits(v.gender) && v.id !== result.Narrator && !v.fun);
     const list = pool.length ? pool : voices;
     const pick = list.find((v) => !used.has(v.id)) ?? list[hash(ch.name) % list.length];
     result[ch.name] = pick.id;
