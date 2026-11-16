@@ -47,6 +47,8 @@ export interface Character {
   age: Age;
   traits?: string;
   accent?: string;
+  /** How many lines they speak in the whole book (from the pre-scan) */
+  lines?: number;
 }
 
 export interface Scene {

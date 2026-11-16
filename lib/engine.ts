@@ -5,6 +5,7 @@
 import { splitSentences } from "./chunk";
 import { BuiltinVoices, builtinSupported, type DeviceKind, type Tier } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
+import { scanCharacters } from "./cast-scan";
 import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
 import type { Analysis, AppConfig, Chapter, Character, Emotion, Mood, Provider, RawSegment, Scene, Segment, VoiceOption } from "./types";
@@ -412,6 +413,7 @@ export class ReaderEngine {
     this.chunks = book.chunks;
     this.chapters = book.chapters;
     this.characters = book.characters ?? [];
+    if (!book.scanned) this.prescan(book);
     this.meta = book.meta ?? { genre: "", language: "", narrationStyle: "" };
     this.castingByProvider = book.casting ?? {};
     this.accents = book.accents ?? {};
@@ -560,6 +562,24 @@ export class ReaderEngine {
     this.casting = castVoices(this.characters, this.voicesFor(), this.meta.genre || "other", this.casting);
     this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
     for (const ch of this.characters) if (!(ch.name in this.accents)) this.accents[ch.name] = ch.accent ?? "";
+  }
+
+  /** Read the whole book once to know its characters before the first line is spoken. */
+  private prescan(book: BookRecord) {
+    let found: ReturnType<typeof scanCharacters> = [];
+    try {
+      found = scanCharacters(book.chunks);
+    } catch {
+      return;
+    }
+    const byName = new Map(this.characters.filter((c) => !(found.length && /^Speaker [AB]$/.test(c.name))).map((c) => [c.name.toLowerCase(), c]));
+    for (const c of found) {
+      const known = byName.get(c.name.toLowerCase());
+      if (known) known.lines = c.lines;
+      else byName.set(c.name.toLowerCase(), c);
+    }
+    this.characters = [...byName.values()].sort((a, b) => (b.lines ?? 0) - (a.lines ?? 0));
+    library.patch(book.id, { characters: this.characters, scanned: true });
   }
 
   character(name: string) {

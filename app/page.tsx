@@ -304,6 +304,8 @@ export default function Home() {
   const usage = e.studioUsage();
   const waitedFor = e.waitingSince ? Math.max(0, Math.round((Date.now() - e.waitingSince) / 1000)) : 0;
   const speakers = e.oneVoice ? ["Narrator"] : ["Narrator", ...e.characters.map((c) => c.name)];
+  /** Characters found by the pre-scan (or the AI), not the "Speaker A/B" stand-ins. */
+  const realCast = e.characters.filter((c) => !/^Speaker [AB]$/.test(c.name));
   const chapterIdx = e.currentChapterIndex();
   const premium = e.premium;
   const showUpgrade = e.premiumPrompt;
@@ -481,7 +483,7 @@ export default function Home() {
                   <span className="chip">{AMBIENCE_ICON[currentScene.ambience]} {currentScene.ambience}</span>
                 )}
                 <button className={`chip link ${panel === "cast" ? "on" : ""}`} onClick={() => setPanel((p) => (p === "cast" ? "none" : "cast"))}>
-                  🎭 {e.oneVoice ? "Voice" : `Voices (${e.characters.length + 1})`}
+                  🎭 {realCast.length ? `${realCast.length} character${realCast.length > 1 ? "s" : ""}` : e.oneVoice ? "Voice" : `Voices (${e.characters.length + 1})`}
                 </button>
                 <button className={`chip link ${panel === "sound" ? "on" : ""}`} onClick={() => setPanel((p) => (p === "sound" ? "none" : "sound"))}>
                   🎵 Sound {premium ? "" : "🔒"}
@@ -549,6 +551,22 @@ export default function Home() {
                       <input type="checkbox" checked={e.prefs.characterPitch} onChange={(x) => e.setPrefs({ characterPitch: x.target.checked })} /> Different pitch per character
                       <span className="muted small">Lower for men, higher for women and children. Turn off if voices sound unnatural.</span>
                     </label>}
+                  </div>
+                )}
+                {e.oneVoice && realCast.length > 0 && (
+                  <div className="cast-found small">
+                    <p>
+                      <strong>Characters in this book</strong> <span className="muted">· found before reading, most talkative first</span>
+                    </p>
+                    <div className="cast-chips">
+                      {realCast.slice(0, 16).map((c) => (
+                        <span key={c.name} className="cast-chip" style={{ ["--c" as string]: speakerColor(c.name) }}>
+                          {c.age === "child" ? "🧒" : c.age === "elderly" ? (c.gender === "female" ? "👵" : "👴") : c.gender === "female" ? "👩" : c.gender === "male" ? "👨" : "🙂"} {c.name}
+                          {c.lines ? <small className="muted"> {c.lines}</small> : null}
+                        </span>
+                      ))}
+                    </div>
+                    <button className="btn small-btn" onClick={() => e.setPrefs({ singleVoice: false })}>Give each character their own voice</button>
                   </div>
                 )}
                 {speakers.map((name) => {

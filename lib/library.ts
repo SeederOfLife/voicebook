@@ -12,6 +12,8 @@ export interface BookRecord {
   openedAt: number;
   position: { chunk: number; offset: number };
   characters?: Character[];
+  /** The whole book was scanned for its characters. */
+  scanned?: boolean;
   meta?: { genre: string; language: string; narrationStyle: string };
   casting?: Partial<Record<Provider, Record<string, string>>>;
   accents?: Record<string, string>;
