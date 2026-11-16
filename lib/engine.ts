@@ -20,7 +20,8 @@ const RAMP = [170, 280];
 /** Analyse the next part of the book when fewer than this many lines are left. */
 const LOOKAHEAD_SEGMENTS = 14;
 /** How many passages to get ready beyond the one being read. */
-const AHEAD: Record<Provider, number> = { studio: 2, builtin: 1, elevenlabs: 2, openai: 2, browser: 0 };
+/** How many passages are kept ready ahead of the one being read (a rolling buffer). */
+const AHEAD: Record<Provider, number> = { studio: 4, builtin: 3, elevenlabs: 3, openai: 3, browser: 0 };
 /**
  * Longest passage read in one go, in characters. Engines that read neutrally get whole
  * passages (more natural flow); acting engines get one line at a time (0), because each
@@ -900,13 +901,31 @@ export class ReaderEngine {
     this.prepareAhead(p);
   }
 
+  /**
+   * Keep the next passages ready while the current one plays. They are prepared one after
+   * the other (nearest first), each starting as soon as the previous is ready, so the
+   * buffer refills continuously instead of only when a new passage begins.
+   */
   private prepareAhead(p: Passage) {
-    let next = p.end + 1;
-    for (let k = 0; k < AHEAD[this.provider]; k++) {
-      const q = this.passageAt(next);
-      if (!q) break;
-      this.audioFor(q, true).catch(() => {});
-      next = q.end + 1;
+    const want = AHEAD[this.provider];
+    if (!want) return;
+    const epoch = this.epoch;
+    const provider = this.provider;
+    const step = (from: number, left: number) => {
+      if (left <= 0 || epoch !== this.epoch || provider !== this.provider) return;
+      const q = this.passageAt(from);
+      if (!q) return; // the rest of the book isn't read yet: prepareAhead runs again when it is
+      this.audioFor(q, true).then(
+        () => step(q.end + 1, left - 1),
+        () => {},
+      );
+    };
+    step(p.end + 1, want);
+    // The server can make two at once: start the second-nearest in parallel too.
+    if (provider === "studio" || provider === "elevenlabs" || provider === "openai") {
+      const first = this.passageAt(p.end + 1);
+      const second = first && this.passageAt(first.end + 1);
+      if (second) this.audioFor(second, true).catch(() => {});
     }
   }
 
