@@ -295,6 +295,7 @@ export class ReaderEngine {
       navigator.mediaSession.setActionHandler("nexttrack", () => this.next());
       navigator.mediaSession.setActionHandler("previoustrack", () => this.previous());
     }
+    window.setInterval(() => this.watchdog(), 3000);
     window.addEventListener("pagehide", () => this.savePosition());
   }
 
@@ -602,7 +603,10 @@ export class ReaderEngine {
       if (a) this.aiUsed = true;
       if (!a && !this.aiUnavailable) {
         try {
+          // Never hold the reading up for long: after a while the quick on-device analysis is used.
+          const waiting = this.segments.length === 0 || (this.playing && this.index >= this.segments.length);
           const r = await fetch("/api/analyze", {
+            signal: timeoutSignal(waiting ? 12_000 : 40_000),
             method: "POST",
             headers: this.headers(),
             body: JSON.stringify({
@@ -1027,6 +1031,35 @@ export class ReaderEngine {
    * Play silence on the player. Looped while audio is being prepared, so a phone with
    * its screen off keeps the page running until the passage is ready.
    */
+  private stuckSince = 0;
+  /**
+   * Safety net: if the phone stopped the sound on its own, start it again; if a passage has
+   * been "loading" for too long, ask for it again.
+   */
+  private watchdog() {
+    if (!this.playing || this.provider === "browser" || this.previewing) {
+      this.stuckSince = 0;
+      return;
+    }
+    const a = this.audio;
+    if (!this.buffering && a.paused && !a.ended && a.src) {
+      a.play().catch(() => {
+        this.notice = "Your phone paused the sound. Tap ▶ to carry on.";
+        this.playing = false;
+        this.onChange();
+      });
+      return;
+    }
+    if (this.buffering) {
+      this.stuckSince ||= Date.now();
+      if (a.paused && this.unlocked) this.holdAudioSession(); // keep the phone's audio session alive
+      if (Date.now() - this.stuckSince > 75_000) {
+        this.stuckSince = 0;
+        this.playCurrent(); // try again: saved or freshly made audio
+      }
+    } else this.stuckSince = 0;
+  }
+
   private gaps = new Map<number, string>();
   /** A short silence (rounded to 50 ms), made once and reused. */
   private gapUrl(ms: number): string {
@@ -1290,7 +1323,8 @@ export class ReaderEngine {
       await this.analyzeNext();
       if (t !== this.token) return;
     }
-    if (this.segments.length - this.index < LOOKAHEAD_SEGMENTS) this.analyzeNext();
+    // Keep the next part of the book analysed well ahead, so passages can be prepared across parts.
+    if (this.segments.length - this.index < LOOKAHEAD_SEGMENTS * 4) this.analyzeNext();
 
     const p = this.passageAt(this.index)!;
     this.index = p.start;
