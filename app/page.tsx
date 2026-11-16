@@ -103,6 +103,8 @@ export default function Home() {
   const [showPaste, setShowPaste] = useState(false);
   const [panel, setPanel] = useState<"none" | "cast" | "sound">("none");
   const [sidebar, setSidebar] = useState(false);
+  /** The voice chooser opened by touching the voice that is speaking. */
+  const [voiceSheet, setVoiceSheet] = useState<string | null>(null);
   const [modal, setModal] = useState<"none" | "account" | "signin">("none");
   const [email, setEmail] = useState("");
   const [authMsg, setAuthMsg] = useState<string | null>(null);
@@ -662,7 +664,7 @@ export default function Home() {
                       ref={i === e.index ? activeRef : undefined}
                       className={`seg ${active ? "active" : ""} ${heading ? "heading" : ""} ${cast && s.speaker !== "Narrator" ? "dialogue" : ""}`}
                       style={cast && s.speaker !== "Narrator" ? { ["--c" as string]: speakerColor(s.speaker) } : undefined}
-                      onClick={() => e.jump(i)}
+                      onClick={() => (active && e.playing ? setVoiceSheet(s.speaker) : e.jump(i))}
                       title={cast ? `${s.speaker} · ${s.emotion}${s.delivery ? ` · ${s.delivery}` : ""}${s.sfx ? ` · 🔊 ${s.sfx}` : ""}` : undefined}
                     >
                       {cast && s.speaker !== "Narrator" && <span className="who">{s.speaker}{EMOTION_ICON[s.emotion] ? ` ${EMOTION_ICON[s.emotion]}` : ""}</span>}
@@ -693,7 +695,10 @@ export default function Home() {
                 <span className="dl">{e.waitMessage}{waitedFor >= 3 ? ` ${waitedFor}s` : ""}</span>
               ) : current ? (
                 <>
-                  {!e.oneVoice && <><span className="dot" style={{ background: speakerColor(current.speaker) }} /> {current.speaker}<span className="sep">·</span></>}
+                  <button className="voice-chip" onClick={() => setVoiceSheet(current.speaker)} aria-label="Change the voice">
+                    🎙 {voiceLabel(e, e.oneVoice ? "Narrator" : current.speaker)} ▾
+                  </button>
+                  <span className="sep">·</span>
                   <button className="link-btn" onClick={() => setSidebar(true)}>{e.chapters[chapterIdx]?.title ?? `part ${current.chunk + 1}`}</button>
                   <span className="sep">·</span>{Math.round(progress * 100)}%
                 </>
@@ -715,6 +720,7 @@ export default function Home() {
       )}
 
       {/* ---------- Modals ---------- */}
+      {voiceSheet && hasBook && <VoiceSheet e={e} speaker={voiceSheet} onClose={() => setVoiceSheet(null)} />}
       {showUpgrade && (
         <div className="modal-bg" onClick={() => (e.premiumPrompt = false, setTick((t) => t + 1))}>
           <div className="card modal premium" onClick={(x) => x.stopPropagation()}>
@@ -851,6 +857,75 @@ function OnDevicePanel({ e }: { e: ReaderEngine }) {
           </button>
         </p>
       )}
+    </div>
+  );
+}
+
+/** Short name of the voice a speaker uses ("Heart" from "Heart · warm, American"). */
+function voiceLabel(e: ReaderEngine, speaker: string): string {
+  const id = e.casting[speaker] ?? e.casting.Narrator;
+  const v = e.voicesFor().find((x) => x.id === id);
+  return (v?.name ?? "Voice").replace(/^★\s*/, "").split(/ · | \(/)[0];
+}
+
+/** Touch the voice that's speaking → choose another one, heard at once. */
+function VoiceSheet({ e, speaker, onClose }: { e: ReaderEngine; speaker: string; onClose: () => void }) {
+  const isCharacter = speaker !== "Narrator";
+  // In one-voice mode a change applies to the whole book unless "only this character" is picked.
+  const [onlyThem, setOnlyThem] = useState(isCharacter && !e.oneVoice);
+  const target = onlyThem ? speaker : e.oneVoice ? "Narrator" : speaker;
+  const voices = e.voicesFor();
+  const chosen = e.casting[target] ?? e.casting.Narrator;
+  const pick = (id: string) => {
+    if (onlyThem && e.prefs.singleVoice) e.setPrefs({ singleVoice: false });
+    e.setVoice(target, id);
+    if (!e.playing) e.play();
+  };
+  const ch = isCharacter ? e.character(speaker) : undefined;
+  return (
+    <div className="modal-bg sheet-bg" onClick={onClose}>
+      <div className="card modal voice-sheet" onClick={(x) => x.stopPropagation()} role="dialog" aria-label="Choose the voice">
+        <div className="row between">
+          <h3>Choose the voice</h3>
+          <button className="icon small-icon" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        {isCharacter && (
+          <div className="seg-toggle" role="radiogroup">
+            <button role="radio" aria-checked={!onlyThem} className={!onlyThem ? "on" : ""} onClick={() => setOnlyThem(false)}>
+              {e.oneVoice ? "Whole book" : "Narrator"}
+            </button>
+            <button role="radio" aria-checked={onlyThem} className={onlyThem ? "on" : ""} onClick={() => setOnlyThem(true)}>
+              Only {speaker}
+            </button>
+          </div>
+        )}
+        <p className="muted small">
+          {onlyThem
+            ? `${speaker}${ch ? ` (${[ch.gender !== "neutral" ? ch.gender : "", ch.age !== "adult" ? ch.age : ""].filter(Boolean).join(", ") || "character"})` : ""} gets their own voice. Tap one to hear it now.`
+            : "Tap a voice to hear it right away. It is kept for this book."}
+        </p>
+        <label className="field-inline small">
+          <span className="muted">Kind of voice</span>
+          <select value={e.provider} onChange={(x) => e.setProvider(x.target.value as Provider)}>
+            {e.availableProviders().map((p) => (
+              <option key={p} value={p}>{PROVIDER_LABEL[p]}</option>
+            ))}
+          </select>
+        </label>
+        <div className="voice-list">
+          {voices.length === 0 && <p className="muted small">No voices for this kind on this device.</p>}
+          {voices.map((v) => {
+            const [name, ...rest] = v.name.replace(/^★\s*/, "").split(" · ");
+            return (
+              <button key={v.id} className={`voice-row${v.id === chosen ? " chosen" : ""}`} onClick={() => pick(v.id)}>
+                <span className="voice-name">{name}</span>
+                <span className="muted small">{[rest.join(" · "), v.gender !== "neutral" ? v.gender : ""].filter(Boolean).join(" · ")}</span>
+                {v.id === chosen && <span className="tick" aria-label="chosen">{e.buffering ? <span className="spinner inline" /> : "✓"}</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
