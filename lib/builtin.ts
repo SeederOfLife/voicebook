@@ -151,6 +151,9 @@ export class BuiltinVoices {
   notice: string | null = null;
   private worker: Worker | null = null;
   private loadedVoice = "";
+  /** Light voices opened in the current worker, and those stored on the device. */
+  private opened = new Set<string>();
+  private storedVoices = new Set<string>();
   private pending = new Map<number, { resolve: (audio: Blob) => void; reject: (e: Error) => void; chars: number }>();
   /** What the worker was doing last (shown if it gets stuck). */
   private stage = "starting";
@@ -196,7 +199,13 @@ export class BuiltinVoices {
     try {
       const has = new Set<Tier>();
       const piper = await caches.open("voicebook-voices");
-      for (const req of await piper.keys()) if (/\.onnx$/.test(req.url)) has.add("light");
+      for (const req of await piper.keys()) {
+        const m = /\/([^/]+)\.onnx$/.exec(req.url);
+        if (m) {
+          has.add("light");
+          this.storedVoices.add(m[1]);
+        }
+      }
       const hf = await caches.open("transformers-cache");
       for (const req of await hf.keys()) {
         if (/onnx\/model_quantized\.onnx$/.test(req.url)) has.add("balanced");
@@ -267,6 +276,7 @@ export class BuiltinVoices {
     this.progress = null;
     this.runsOn = null;
     this.loadedVoice = "";
+    this.opened.clear();
     this.pending.forEach((p) => p.reject(err));
     this.pending.clear();
   }
@@ -334,10 +344,13 @@ export class BuiltinVoices {
   /** Start getting the voice ready (download if needed) in the background. */
   warm(voice?: string) {
     const v = this.voiceFor(voice);
-    if (this.worker && (this.tier !== "light" || this.loadedVoice === v)) return;
-    if (this.tier === "light" && this.loadedVoice && this.loadedVoice !== v) {
-      this.ready = false;
-      this.progress = 0;
+    if (this.worker && (this.tier !== "light" || this.opened.has(v))) return;
+    if (this.tier === "light") {
+      if (this.opened.size) {
+        this.ready = false;
+        this.progress = this.storedVoices.has(v) ? 1 : 0;
+      }
+      this.opened.add(v);
     }
     if (!this.stored.has(this.tier)) write(LOADING_KEY, this.tier);
     this.loadedVoice = v;
@@ -348,12 +361,13 @@ export class BuiltinVoices {
   generate(text: string, voice: string, speed: number): Promise<Blob> {
     const id = ++this.seq;
     const v = this.voiceFor(voice);
-    if (this.tier === "light" && this.loadedVoice !== v) {
-      // A different light voice is its own download.
+    if (this.tier === "light" && !this.opened.has(v)) {
+      // A light voice not opened yet: its own download (once) and opening.
       this.ready = false;
-      this.progress = 0;
-      this.loadedVoice = v;
+      this.progress = this.storedVoices.has(v) ? 1 : 0;
+      this.opened.add(v);
     }
+    this.loadedVoice = v;
     if (!this.worker && !this.stored.has(this.tier)) write(LOADING_KEY, this.tier);
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, chars: text.length });

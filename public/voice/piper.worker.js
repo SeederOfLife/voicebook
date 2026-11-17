@@ -56,12 +56,22 @@ async function fetchCached(url, onProgress) {
   return buf;
 }
 
-let current = null; // { voice, promise }
+// Several voices stay open at once (narrator + characters), so switching speaker is instant.
+const MAX_OPEN = apple ? 2 : 4;
+const open = new Map(); // voice → Promise<{ session, config }>, most recently used last
 function load(voice) {
-  if (current?.voice === voice) return current.promise;
-  const previous = current;
+  const hit = open.get(voice);
+  if (hit) {
+    open.delete(voice);
+    open.set(voice, hit);
+    return hit;
+  }
+  while (open.size >= MAX_OPEN) {
+    const [oldest, p] = open.entries().next().value;
+    open.delete(oldest);
+    p.then((m) => m.session.release?.()).catch(() => {});
+  }
   const promise = (async () => {
-    if (previous) (await previous.promise.catch(() => null))?.session.release?.();
     const files = filesOf(voice);
     const config = JSON.parse(new TextDecoder().decode(await fetchCached(files.config)));
     const model = await fetchCached(files.model, (p) => self.postMessage({ type: "progress", progress: p }));
@@ -73,10 +83,8 @@ function load(voice) {
     self.postMessage({ type: "ready", device: "wasm", testMs: Math.round(performance.now() - t0) });
     return { session, config };
   })();
-  current = { voice, promise };
-  promise.catch(() => {
-    if (current?.promise === promise) current = null;
-  });
+  open.set(voice, promise);
+  promise.catch(() => open.get(voice) === promise && open.delete(voice));
   return promise;
 }
 
