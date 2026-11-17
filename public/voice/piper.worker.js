@@ -11,9 +11,9 @@ const SENTENCE_PAUSE = 0.3;
 const PARAGRAPH_PAUSE = 0.6;
 
 ort.env.wasm.wasmPaths = new URL("./piper/", import.meta.url).href;
-const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(navigator.userAgent);
-// Phones run on one core: several cores inside a worker can freeze on iPhone (WebKit).
-ort.env.wasm.numThreads = !mobile && self.crossOriginIsolated ? Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1)) : 1;
+// iPhone/iPad (WebKit) can freeze with several cores inside a worker; Android and computers can't.
+const apple = /iPhone|iPad|iPod/i.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+ort.env.wasm.numThreads = !apple && self.crossOriginIsolated ? Math.max(1, Math.min(4, (navigator.hardwareConcurrency || 2) - 1)) : 1;
 const stage = (name) => self.postMessage({ type: "stage", stage: name });
 
 /** "en_US-lessac-medium" → its two files on Hugging Face. */
