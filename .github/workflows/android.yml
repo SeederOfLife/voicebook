@@ -1,0 +1,13 @@
+name: Android app
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/android.yml"]
+permissions:
+  contents: write
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Android build pipeline placeholder"
