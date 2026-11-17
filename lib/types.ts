@@ -100,7 +100,7 @@ export interface Analysis {
  *  - builtin:    the studio voice generated inside the browser (computers only)
  *  - browser:    the device's own text-to-speech
  */
-export type Provider = "studio" | "elevenlabs" | "openai" | "builtin" | "browser";
+export type Provider = "native" | "studio" | "elevenlabs" | "openai" | "builtin" | "browser";
 
 export interface VoiceOption {
   id: string;

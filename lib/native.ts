@@ -1,0 +1,186 @@
+// The Android app's native voice: the studio voice (Kokoro v1.0) running on the phone's
+// own processor through the app (window.VBNative, see android/…/NativeBridge.kt).
+// Only present inside the Voicebook Android app.
+
+export type NativeTier = "fast" | "best";
+
+interface Bridge {
+  info(): string;
+  download(tier: string): void;
+  remove(tier: string): void;
+  speak(id: string, tier: string, text: string, sid: number, speed: number): void;
+  setPlaying(playing: boolean, title: string, subtitle: string): void;
+  openExternal(url: string): void;
+}
+
+interface TierStatus {
+  ready: boolean;
+  mb: number;
+  downloading: boolean;
+  progress: number;
+}
+
+interface Info {
+  version: string;
+  versionCode: number;
+  cores: number;
+  threads: number;
+  memoryMb: number;
+  tiers: Record<NativeTier, TierStatus>;
+}
+
+/** Speaker numbers in the native model (checked against the voice files). */
+export const NATIVE_SIDS: Record<string, number> = {
+  af_alloy: 0, af_aoede: 1, af_bella: 2, af_heart: 3, af_jessica: 4, af_kore: 5, af_nicole: 6, af_nova: 7,
+  af_river: 8, af_sarah: 9, af_sky: 10, am_adam: 11, am_echo: 12, am_eric: 13, am_fenrir: 14, am_liam: 15,
+  am_michael: 16, am_onyx: 17, am_puck: 18, am_santa: 19, bf_alice: 20, bf_emma: 21, bf_isabella: 22,
+  bf_lily: 23, bm_daniel: 24, bm_fable: 25, bm_george: 26, bm_lewis: 27,
+};
+
+export const NATIVE_TIERS: Record<NativeTier, { name: string; blurb: string }> = {
+  fast: { name: "Fast", blurb: "Compressed studio voice. Quick on most phones, very close in quality." },
+  best: { name: "Best", blurb: "The full studio voice, exactly like the server. Needs a recent phone (6 GB+ memory)." },
+};
+
+export const ANDROID_APK_URL = "https://github.com/SeederOfLife/voicebook/releases/download/android/voicebook.apk";
+
+const bridge = (): Bridge | undefined =>
+  typeof window !== "undefined" ? (window as unknown as { VBNative?: Bridge }).VBNative : undefined;
+
+/** Running inside the Voicebook Android app. */
+export const inAndroidApp = () => !!bridge();
+
+const TIER_KEY = "vb:native-tier";
+
+export class NativeVoice {
+  info: Info | null = null;
+  tier: NativeTier = "fast";
+  error: string | null = null;
+  private pending = new Map<string, { resolve: (b: Blob) => void; reject: (e: Error) => void }>();
+  private seq = 0;
+
+  constructor(private onChange: () => void) {
+    const b = bridge();
+    if (!b) return;
+    (window as unknown as { __vbNativeEvent?: (t: string, d: Record<string, unknown>) => void }).__vbNativeEvent = (t, d) => this.onEvent(t, d);
+    this.refresh();
+    let saved: string | null = null;
+    try {
+      saved = localStorage.getItem(TIER_KEY);
+    } catch {}
+    this.tier = saved === "best" || saved === "fast" ? saved : this.recommended;
+  }
+
+  get available() {
+    return !!bridge();
+  }
+
+  /** Best on phones with plenty of memory, else Fast. */
+  get recommended(): NativeTier {
+    return (this.info?.memoryMb ?? 0) >= 5500 ? "best" : "fast";
+  }
+
+  status(t: NativeTier = this.tier): TierStatus | null {
+    return this.info?.tiers?.[t] ?? null;
+  }
+
+  get ready() {
+    return !!this.status()?.ready;
+  }
+
+  get downloading() {
+    return !!this.status()?.downloading;
+  }
+
+  get progress() {
+    return this.status()?.progress ?? 0;
+  }
+
+  refresh() {
+    try {
+      this.info = JSON.parse(bridge()!.info());
+    } catch {
+      this.info = null;
+    }
+  }
+
+  setTier(t: NativeTier) {
+    this.tier = t;
+    try {
+      localStorage.setItem(TIER_KEY, t);
+    } catch {}
+    this.onChange();
+  }
+
+  download(t: NativeTier = this.tier) {
+    const s = this.status(t);
+    if (!s || s.ready || s.downloading) return;
+    this.error = null;
+    s.downloading = true;
+    s.progress = 0;
+    bridge()?.download(t);
+    this.onChange();
+  }
+
+  remove(t: NativeTier) {
+    bridge()?.remove(t);
+  }
+
+  setPlaying(playing: boolean, title: string, subtitle: string) {
+    try {
+      bridge()?.setPlaying(playing, title, subtitle);
+    } catch {}
+  }
+
+  generate(text: string, voice: string, speed: number): Promise<Blob> {
+    const b = bridge();
+    if (!b) return Promise.reject(new Error("the phone voice is only available in the Android app"));
+    if (!this.ready) {
+      this.download();
+      return new Promise((resolve, reject) => {
+        // Wait for the download, then speak.
+        const started = Date.now();
+        const check = () => {
+          if (this.ready) return void this.generate(text, voice, speed).then(resolve, reject);
+          if (this.error) return reject(new Error(this.error));
+          if (Date.now() - started > 30 * 60_000) return reject(new Error("the phone voice download took too long"));
+          setTimeout(check, 1000);
+        };
+        check();
+      });
+    }
+    const id = `n${Date.now().toString(36)}${++this.seq}`;
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      b.speak(id, this.tier, text, NATIVE_SIDS[voice] ?? 3, speed);
+    });
+  }
+
+  private onEvent(type: string, d: Record<string, unknown>) {
+    const tier = d.tier as NativeTier | undefined;
+    const s = tier ? this.status(tier) : null;
+    if (type === "progress" && s) {
+      s.downloading = true;
+      s.progress = Number(d.progress) || 0;
+    } else if (type === "downloaded" || type === "removed") {
+      this.refresh();
+    } else if (type === "downloadError") {
+      this.refresh();
+      this.error = `The phone voice couldn't download: ${d.error}`;
+    } else if (type === "result") {
+      const job = this.pending.get(String(d.id));
+      if (!job) return;
+      this.pending.delete(String(d.id));
+      if (d.error) job.reject(new Error(`the phone voice failed: ${d.error}`));
+      else
+        fetch(String(d.url))
+          .then((r) => {
+            if (!r.ok) throw new Error(`the phone voice's audio was missing (${r.status})`);
+            return r.blob();
+          })
+          .then((blob) => job.resolve(blob.type ? blob : new Blob([blob], { type: "audio/wav" })), job.reject);
+      return;
+    }
+    this.onChange();
+  }
+}

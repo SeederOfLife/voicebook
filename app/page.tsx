@@ -10,12 +10,14 @@ import { getSupabase } from "@/lib/supabase-browser";
 import { ACCENTS, type AppConfig, type Provider } from "@/lib/types";
 import { hash } from "@/lib/voices";
 import { DEVICE_KINDS, TIERS, TIER_ORDER, type DeviceKind, type Tier } from "@/lib/builtin";
+import { ANDROID_APK_URL, inAndroidApp, NATIVE_TIERS, type NativeTier } from "@/lib/native";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
   studio: "Studio voice",
   elevenlabs: "ElevenLabs · acting voices",
   openai: "OpenAI · acting voices",
   builtin: "On-device AI voice",
+  native: "Phone AI voice · fastest, offline",
   browser: "Device voice · basic",
 };
 
@@ -142,6 +144,15 @@ export default function Home() {
     window.addEventListener("appinstalled", onInstalled);
     return () => { window.removeEventListener("beforeinstallprompt", onPrompt); window.removeEventListener("appinstalled", onInstalled); };
   }, []);
+
+  const playingNow = engineRef.current?.playing ?? false;
+  const titleNow = engineRef.current?.title ?? "";
+  useEffect(() => {
+    const e = engineRef.current;
+    if (!e) return;
+    const ch = e.chapters[e.currentChapterIndex()]?.title ?? "";
+    e.native.setPlaying(playingNow, titleNow || "Voicebook", ch);
+  }, [playingNow, titleNow]);
 
   useEffect(() => {
     const e = new ReaderEngine(() => setTick((t) => t + 1));
@@ -439,7 +450,7 @@ export default function Home() {
                 <button className="btn" onClick={() => setShowPaste((s) => !s)}>Paste text</button>
                 <button className="btn" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>Try a sample story</button>
               </div>
-              {!installed && <InstallCard evt={installEvt} />}
+              {!installed && !inAndroidApp() && <InstallCard evt={installEvt} />}
               {showPaste && (
                 <div className="paste">
                   <textarea value={paste} onChange={(x) => setPaste(x.target.value)} placeholder="Paste any text here…" rows={8} />
@@ -542,6 +553,7 @@ export default function Home() {
                   </div>
                 )}
                 {e.provider === "builtin" && <OnDevicePanel e={e} />}
+                {e.provider === "native" && <NativePanel e={e} />}
                 <label className="toggle">
                   <input type="checkbox" checked={e.prefs.singleVoice} onChange={(x) => e.setPrefs({ singleVoice: x.target.checked })} /> One voice reads everything
                   <span className="muted small">The most natural. Turn off to give each character their own voice.</span>
@@ -991,13 +1003,66 @@ function InstallCard({ evt }: { evt: { prompt: () => Promise<unknown> } | null }
         <br />
         <span className="muted">Opens like an app, works offline with your saved books and downloaded voices, and keeps reading with the screen off.</span>
       </p>
+      {!ios && /Android/i.test(typeof navigator !== "undefined" ? navigator.userAgent : "") && (
+        <p>
+          <a className="btn primary" href={ANDROID_APK_URL}>⬇ Android app (APK) · fastest</a>
+          <br />
+          <span className="muted">Runs the voice natively on your phone and keeps reading with the screen off. After the download, open the file and allow the install.</span>
+        </p>
+      )}
       {evt ? (
-        <button className="btn primary" onClick={() => void evt.prompt()}>Install the app</button>
+        <button className="btn" onClick={() => void evt.prompt()}>Or install the web app</button>
       ) : (
         <p className="muted">
           {ios ? "In Safari: tap Share, then “Add to Home Screen”." : "In Chrome: tap ⋮ (top right), then “Install app” or “Add to Home screen”."}
         </p>
       )}
+    </div>
+  );
+}
+
+/** The Android app's native phone voice: pick its size, download it once. */
+function NativePanel({ e }: { e: ReaderEngine }) {
+  const n = e.native;
+  const info = n.info;
+  return (
+    <div className="studio-info small ondevice">
+      <p>
+        <strong>Phone AI voice.</strong> The studio voice made by this phone itself
+        {info ? `, on ${info.threads} of its ${info.cores} processor cores` : ""}: works offline, no monthly limit, keeps reading with the screen off.
+      </p>
+      {n.error && <p className="tip">{n.error}</p>}
+      <div className="tiers" role="radiogroup" aria-label="Voice size">
+        {(["fast", "best"] as NativeTier[]).map((t) => {
+          const s = n.status(t);
+          const chosen = n.tier === t;
+          return (
+            <button key={t} role="radio" aria-checked={chosen} className={`tier${chosen ? " chosen" : ""}`} onClick={() => { n.setTier(t); e.setProvider("native"); }}>
+              <span className="tier-head">
+                <strong>{NATIVE_TIERS[t].name}</strong>
+                <span className="muted">{s?.mb ?? "?"} MB</span>
+                {n.recommended === t && <span className="badge">Suits this phone</span>}
+                {s?.ready && <span className="badge ok">Downloaded</span>}
+              </span>
+              <span className="muted">{NATIVE_TIERS[t].blurb}</span>
+              {s?.downloading && (
+                <>
+                  <span className="meter" role="img" aria-label={`Downloading ${Math.round(s.progress * 100)}%`}>
+                    <span style={{ width: `${Math.max(2, Math.round(s.progress * 100))}%` }} />
+                  </span>
+                  <span className="muted">Downloading… {Math.round(s.progress * 100)}% (keep the app open)</span>
+                </>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      {!n.ready && !n.downloading && (
+        <button className="btn small-btn" onClick={() => n.download()}>
+          Download the {NATIVE_TIERS[n.tier].name} voice ({n.status()?.mb ?? "?"} MB)
+        </button>
+      )}
+      {info && <p className="muted">App version {info.version} · <a href={ANDROID_APK_URL}>get the newest app</a></p>}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 // Voicebook offline support. The app itself (page, code, styles, voice engines) is
 // kept on the device so it opens and reads without a connection. Books, saved audio
 // and downloaded voices are already stored by the app (IndexedDB / Cache API).
-const VERSION = "vb-app-v1";
+const VERSION = "vb-app-v2";
 const SHELL = ["/", "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png", "/pdf.worker.min.mjs",
   "/voice/piper.worker.js", "/voice/piper/ort.wasm.min.mjs", "/voice/piper/ort-wasm-simd-threaded.mjs",
   "/voice/piper/ort-wasm-simd-threaded.wasm", "/voice/piper/phonemizer.js"];
@@ -32,7 +32,7 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin) return; // voices from Hugging Face: handled by the app
-  if (url.pathname.startsWith("/api/")) return; // always live
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/__native/")) return; // always live / served by the Android app
 
   // Pages: the newest version when online, the kept one when offline.
   if (req.mode === "navigate") {

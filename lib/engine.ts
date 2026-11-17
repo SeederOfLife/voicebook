@@ -6,6 +6,7 @@ import { splitSentences } from "./chunk";
 import { BuiltinVoices, builtinSupported, type DeviceKind, type Tier } from "./builtin";
 import { heuristicAnalyze } from "./heuristic";
 import { scanCharacters } from "./cast-scan";
+import { NativeVoice } from "./native";
 import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
 import type { Analysis, AppConfig, Chapter, Character, Emotion, Mood, Provider, RawSegment, Scene, Segment, VoiceOption } from "./types";
@@ -22,13 +23,13 @@ const RAMP = [170, 280];
 const LOOKAHEAD_SEGMENTS = 14;
 /** How many passages to get ready beyond the one being read. */
 /** How many passages are kept ready ahead of the one being read (a rolling buffer). */
-const AHEAD: Record<Provider, number> = { studio: 4, builtin: 3, elevenlabs: 3, openai: 3, browser: 0 };
+const AHEAD: Record<Provider, number> = { native: 3, studio: 4, builtin: 3, elevenlabs: 3, openai: 3, browser: 0 };
 /**
  * Longest passage read in one go, in characters. Engines that read neutrally get whole
  * passages (more natural flow); acting engines get one line at a time (0), because each
  * line carries its own emotion.
  */
-const PASSAGE_CHARS: Record<Provider, number> = { studio: 380, builtin: 300, browser: 450, elevenlabs: 0, openai: 0 };
+const PASSAGE_CHARS: Record<Provider, number> = { native: 380, studio: 380, builtin: 300, browser: 450, elevenlabs: 0, openai: 0 };
 
 /** After a failure, wait this long before asking the server for the studio voice again. */
 const RETRY_MS = 120_000;
@@ -235,6 +236,8 @@ export class ReaderEngine {
   prefs: Prefs = { ...DEFAULT_PREFS };
   soundscape = new Soundscape();
   builtin: BuiltinVoices;
+  /** The Android app's native phone voice (absent elsewhere). */
+  native: NativeVoice;
   /** The server's studio voice has produced audio during this visit. */
   studioReady = false;
   /** Passages of the open book whose audio is saved on this device. */
@@ -269,6 +272,7 @@ export class ReaderEngine {
     this.audio = new Audio();
     this.audio.preload = "auto";
     this.builtin = new BuiltinVoices(onChange);
+    this.native = new NativeVoice(onChange);
     if (this.builtin.notice) this.notice = this.builtin.notice;
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;
@@ -318,7 +322,8 @@ export class ReaderEngine {
     this.aiUnavailable = !c.providers.anthropic;
     const saved = store.get(ENGINE_KEY) as Provider | null;
     const available = this.availableProviders();
-    const next = saved && available.includes(saved) ? saved : available[0];
+    const fallback = available[0] === "native" && !this.native.ready && available.includes("studio") ? "studio" : available[0];
+    const next = saved && available.includes(saved) ? saved : fallback;
     if (next !== this.provider) {
       this.provider = next;
       this.casting = this.castingByProvider[next] ?? {};
@@ -331,6 +336,7 @@ export class ReaderEngine {
   /** Engines this visitor can choose, best first. */
   availableProviders(): Provider[] {
     const p: Provider[] = [];
+    if (this.native?.available) p.push("native");
     if (this.premium && this.config?.providers.elevenlabs) p.push("elevenlabs");
     if (this.premium && this.config?.providers.openai) p.push("openai");
     if (this.config?.providers.studio) p.push("studio");
@@ -541,6 +547,7 @@ export class ReaderEngine {
   voicesFor(p: Provider = this.provider): VoiceOption[] {
     if (p === "studio") return STUDIO_VOICES;
     if (p === "builtin") return this.builtin.voices;
+    if (p === "native") return STUDIO_VOICES;
     if (p === "openai") return this.config?.voices.openai ?? [];
     if (p === "elevenlabs") return this.config?.voices.elevenlabs ?? [];
     // Device voices: only the best-quality reading voices. English first; another
@@ -646,7 +653,7 @@ export class ReaderEngine {
     if (!this.meta.genre || (this.meta.genre === "other" && a.genre !== "other")) this.meta.genre = a.genre;
     if (!this.meta.language && a.language) this.meta.language = a.language;
     if (!this.meta.narrationStyle && a.narrationStyle) this.meta.narrationStyle = a.narrationStyle;
-    if ((this.provider === "studio" || this.provider === "builtin") && this.meta.language && !this.meta.language.toLowerCase().startsWith("en")) {
+    if ((this.provider === "studio" || this.provider === "builtin" || this.provider === "native") && this.meta.language && !this.meta.language.toLowerCase().startsWith("en")) {
       // The studio voice only speaks English for now.
       this.setProvider("browser", false);
       this.notice = `The studio voice only reads English for now, so this ${this.meta.language.toUpperCase()} book is read by your device's own voice.`;
@@ -737,7 +744,7 @@ export class ReaderEngine {
     const seg = segs[i];
     const limit = PASSAGE_CHARS[this.provider];
     if (!seg || !limit) return [i, i];
-    const ramp = this.provider === "studio" || this.provider === "builtin";
+    const ramp = this.provider === "studio" || this.provider === "builtin" || this.provider === "native";
     let s = i;
     while (s > 0 && segs[s - 1].chunk === seg.chunk) s--;
     for (let n = 0; ; ) {
@@ -762,6 +769,7 @@ export class ReaderEngine {
   private keyOf(provider: Provider, voice: string, text: string, tailMs: number, seg: Segment): string {
     if (provider === "studio") return `studio|${voice}|${tailMs}|${hash53(text)}`;
     if (provider === "builtin") return `builtin-${this.builtin.tier}|${voice}|${hash53(text)}`;
+    if (provider === "native") return `native-${this.native.tier}|${voice}|${hash53(text)}`;
     if (provider === "browser") return `${provider}|${voice}|${hash53(text)}`;
     // Acting voices: everything that changes the performance is part of the identity.
     const acting = [seg.emotion, seg.delivery ?? "", (seg.tags ?? []).join(","), seg.intensity ?? 1, this.accents[seg.speaker] ?? ""].join("~");
@@ -842,6 +850,7 @@ export class ReaderEngine {
 
   private async generateRaw(provider: Provider, p: Passage, lookAhead: boolean, epoch: number): Promise<Blob> {
     if (provider === "builtin") return this.builtin.generate(p.text, p.voice, 1);
+    if (provider === "native") return this.native.generate(p.text, p.voice, 1);
     if (provider === "studio") return this.studioSlot(() => this.studioRequest(p), lookAhead, epoch);
 
     const seg = p.seg;
@@ -1181,6 +1190,7 @@ export class ReaderEngine {
     if (remember && p === "studio" && this.studioDown?.kind !== "limit") this.studioDown = null; // choosing it again = try again now
     if (remember) store.set(ENGINE_KEY, p);
     if (p === "builtin") this.builtin.warm(this.casting.Narrator);
+    if (p === "native") this.native.download();
     this.casting = this.castingByProvider[p] ?? {};
     this.recast();
     this.snap(this.index);
@@ -1256,6 +1266,7 @@ export class ReaderEngine {
     else if (this.provider === "builtin" && !this.builtin.ready && this.builtin.progress !== null && this.builtin.progress < 1)
       return Math.round(this.builtin.progress * 100); // the one-time download
     else if (this.provider === "builtin" && !this.builtin.ready) expect = 20; // opening the voice
+    else if (this.provider === "native" && !this.native.ready) return Math.round(this.native.progress * 100); // one-time download
     else {
       const p = this.passageAt(this.index);
       const chars = p?.text.length ?? 300;
@@ -1271,6 +1282,9 @@ export class ReaderEngine {
     if (!this.segments[this.index]) return "Reading the next part of the book…";
     if (this.provider === "studio" && !this.studioDown) {
       return this.studioReady ? "Preparing the next passage…" : "Warming up the studio voice. The first time can take up to a minute…";
+    }
+    if (this.provider === "native") {
+      return this.native.ready ? "Making the voice on this phone…" : "Downloading the phone voice (only once)…";
     }
     if (this.provider === "builtin" || this.provider === "studio") {
       if (this.builtin.ready) return "Making the voice on this device…";
@@ -1293,12 +1307,12 @@ export class ReaderEngine {
 
   /** The on-computer voice can't deliver: carry on with the device's own voice. False if there is none. */
   private fallBack(e: unknown): boolean {
-    if (this.provider !== "builtin") return false;
+    if (this.provider !== "builtin" && this.provider !== "native") return false;
     const why = e instanceof Error ? e.message : String(e);
     // Prefer the studio voice (online, best quality) when it can be used.
     if (this.availableProviders().includes("studio") && !this.studioUsedUp && !(this.studioDown && Date.now() - this.studioDown.since < RETRY_MS)) {
       this.setProvider("studio", false);
-      this.notice = `The on-device AI voice couldn't run (${why}), so the studio voice is reading instead (needs a connection).`;
+      this.notice = `The ${this.provider === "native" ? "phone" : "on-device AI"} voice couldn't run (${why}), so the studio voice is reading instead (needs a connection).`;
       return true;
     }
     if (!this.browserVoices.length) return false;
@@ -1313,6 +1327,17 @@ export class ReaderEngine {
    * the chosen engine, so saved passages keep playing and it is tried again later.
    */
   private async standIn(p: Passage, t: number): Promise<boolean> {
+    if (this.native.ready) {
+      try {
+        this.onChange();
+        const blob = await this.native.generate(p.text, p.voice, 1);
+        if (t !== this.token) return true;
+        await this.startAudio(URL.createObjectURL(blob), p, t, "native");
+        return true;
+      } catch {
+        if (t !== this.token) return true;
+      }
+    }
     if (this.builtin.available) {
       try {
         this.onChange();
