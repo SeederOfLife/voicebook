@@ -58,7 +58,7 @@ const DEFAULT_PREFS: Prefs = {
   music: "moments",
   sfx: true,
   bgVolume: 0.45,
-  singleVoice: true,
+  singleVoice: false,
   expressiveness: 0.5,
   pauses: 1,
   characterPitch: false,
@@ -273,7 +273,14 @@ export class ReaderEngine {
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;
     try {
-      this.prefs = { ...DEFAULT_PREFS, ...JSON.parse(store.get(PREFS_KEY) ?? "{}") };
+      const saved = JSON.parse(store.get(PREFS_KEY) ?? "{}");
+      // Characters now get their own voices by default (once; a later choice is kept).
+      if (!saved.castV2) {
+        saved.singleVoice = false;
+        saved.castV2 = true;
+        store.set(PREFS_KEY, JSON.stringify(saved));
+      }
+      this.prefs = { ...DEFAULT_PREFS, ...saved };
     } catch {}
     try {
       const u = JSON.parse(store.get(USAGE_KEY) ?? "null");
@@ -814,12 +821,26 @@ export class ReaderEngine {
       }
       return URL.createObjectURL(blob);
     })();
-    job.catch(() => this.cache.delete(p.key));
+    job.then(() => { this.ready.add(p.key); this.onChange(); }, () => this.cache.delete(p.key));
     this.cache.set(p.key, job);
     return job;
   }
 
+  /** Passages whose audio is ready (for the "ready ahead" count). */
+  private ready = new Set<string>();
+  /** Learned seconds needed per character of text, per engine (for the progress %). */
+  private secPerChar: Partial<Record<Provider, number>> = { studio: 0.03, builtin: 0.05, elevenlabs: 0.01, openai: 0.01 };
+
   private async generate(provider: Provider, p: Passage, lookAhead: boolean, epoch: number): Promise<Blob> {
+    const started = Date.now();
+    const blob = await this.generateRaw(provider, p, lookAhead, epoch);
+    const per = (Date.now() - started) / 1000 / Math.max(40, p.text.length);
+    const old = this.secPerChar[provider] ?? per;
+    if (per < old * 4) this.secPerChar[provider] = old * 0.6 + per * 0.4; // queued waits are not counted fully
+    return blob;
+  }
+
+  private async generateRaw(provider: Provider, p: Passage, lookAhead: boolean, epoch: number): Promise<Blob> {
     if (provider === "builtin") return this.builtin.generate(p.text, p.voice, 1);
     if (provider === "studio") return this.studioSlot(() => this.studioRequest(p), lookAhead, epoch);
 
@@ -1211,6 +1232,40 @@ export class ReaderEngine {
   }
 
   /** What the listener is waiting for, in words (null when nothing). */
+  /** How many passages after the current one are already prepared. */
+  get readyAhead(): number {
+    if (this.provider === "browser") return 0;
+    let n = 0;
+    let p = this.passageAt(this.index);
+    while (p && n < 9) {
+      const q = this.passageAt(p.end + 1);
+      if (!q || !this.ready.has(q.key)) break;
+      n++;
+      p = q;
+    }
+    return n;
+  }
+
+  /** 0–99: an estimate of how far the current wait has come. */
+  get waitPercent(): number | null {
+    if (!this.buffering) return null;
+    const since = this.waitingSince || Date.now();
+    const elapsed = (Date.now() - since) / 1000;
+    let expect: number;
+    if (!this.segments[this.index]) expect = 12; // reading the next part of the book
+    else if (this.provider === "builtin" && !this.builtin.ready && this.builtin.progress !== null && this.builtin.progress < 1)
+      return Math.round(this.builtin.progress * 100); // the one-time download
+    else if (this.provider === "builtin" && !this.builtin.ready) expect = 20; // opening the voice
+    else {
+      const p = this.passageAt(this.index);
+      const chars = p?.text.length ?? 300;
+      expect = (this.provider === "studio" && !this.studioReady ? 30 : 2) + chars * (this.secPerChar[this.provider] ?? 0.04);
+    }
+    // Moves steadily, slows down near the end instead of stopping at 100.
+    const x = elapsed / Math.max(1, expect);
+    return Math.min(99, Math.round(x < 0.85 ? x * 100 : 85 + 14 * (1 - Math.exp(-(x - 0.85) * 2))));
+  }
+
   get waitMessage(): string | null {
     if (!this.buffering) return null;
     if (!this.segments[this.index]) return "Reading the next part of the book…";
@@ -1222,7 +1277,7 @@ export class ReaderEngine {
       const pct = Math.round((this.builtin.progress ?? 0) * 100);
       return pct >= 100 || this.builtin.available
         ? "Getting the voice ready on this device…"
-        : `Downloading the voice to this device (${this.builtin.tier === "light" ? "63" : this.builtin.tier === "best" ? "326" : "92"} MB, only once)… ${pct}%`;
+        : `Downloading the voice to this device (${this.builtin.tier === "light" ? "63" : this.builtin.tier === "best" ? "326" : "92"} MB, only once)…`;
     }
     return "Preparing the voice…";
   }
@@ -1511,6 +1566,7 @@ export class ReaderEngine {
       if (key === current) continue;
       const job = this.cache.get(key)!;
       this.cache.delete(key);
+      this.ready.delete(key);
       job.then((u) => setTimeout(() => URL.revokeObjectURL(u), 1000)).catch(() => {});
     }
   }
@@ -1518,6 +1574,7 @@ export class ReaderEngine {
   private clearAudioCache() {
     this.cache.forEach((p) => p.then(URL.revokeObjectURL).catch(() => {}));
     this.cache.clear();
+    this.ready.clear();
   }
 
   destroy() {

@@ -733,7 +733,10 @@ export default function Home() {
             )}
             <div className="now muted small">
               {e.waitMessage ? (
-                <span className="dl">{e.waitMessage}{waitedFor >= 3 ? ` ${waitedFor}s` : ""}</span>
+                <span className="dl">
+                  {e.waitMessage} <strong>{e.waitPercent ?? 0}%</strong>
+                  <span className="wait-bar" aria-hidden><span style={{ width: `${e.waitPercent ?? 0}%` }} /></span>
+                </span>
               ) : current ? (
                 <>
                   <button className="voice-chip" onClick={() => setVoiceSheet(current.speaker)} aria-label="Change the voice">
@@ -742,6 +745,11 @@ export default function Home() {
                   <span className="sep">·</span>
                   <button className="link-btn" onClick={() => setSidebar(true)}>{e.chapters[chapterIdx]?.title ?? `part ${current.chunk + 1}`}</button>
                   <span className="sep">·</span>{Math.round(progress * 100)}%
+                  {e.provider !== "browser" && e.playing && (
+                    <span className="ahead" title="Passages already prepared">
+                      <span className="sep">·</span>⚡{e.readyAhead} ready
+                    </span>
+                  )}
                 </>
               ) : "Getting ready…"}
             </div>

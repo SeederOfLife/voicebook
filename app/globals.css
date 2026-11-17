@@ -302,3 +302,7 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .cast-chip { padding: 3px 10px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--c) 50%, transparent); background: color-mix(in srgb, var(--c) 12%, transparent); }
 .install-card { margin-top: 14px; padding: 12px 14px; border-radius: 14px; border: 1px solid #f0a35e55; background: #f0a35e10; display: grid; gap: 8px; }
 .install-card p { margin: 0; }
+.now .dl { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; justify-content: center; }
+.wait-bar { display: inline-block; width: 70px; height: 5px; border-radius: 3px; background: #ffffff1c; overflow: hidden; }
+.wait-bar span { display: block; height: 100%; background: var(--accent); transition: width 0.9s linear; }
+.ahead { white-space: nowrap; }
