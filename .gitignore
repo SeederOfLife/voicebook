@@ -11,3 +11,6 @@ public/voice/kokoro.web.js
 public/voice/ort-wasm-*
 public/voice/piper/ort*
 public/voice/piper/phonemizer.js
+android/app/libs/*.aar
+android/**/build/
+android/.gradle/
