@@ -21,7 +21,7 @@ note("pages:", json.dumps([{k: p.get(k) for k in ("type", "url", "title")} for p
 page = next((p for p in pages if p.get("type") == "page"), None)
 if not page:
     note("RESULT failed: no page"); sys.exit(1)
-ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=60)
+ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=60, suppress_origin=True)
 seq = 0
 
 def ev(expr, wait=True):

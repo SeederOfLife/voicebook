@@ -105,7 +105,9 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
 
-        if (savedInstanceState != null) web.restoreState(savedInstanceState) else web.loadUrl(START_URL)
+        // Restoring a rebuilt screen can come back empty: then just open the app again.
+        val restored = savedInstanceState?.let { web.restoreState(it) }
+        if (restored == null || restored.size == 0) web.loadUrl(START_URL)
         if (savedInstanceState == null && intent?.getBooleanExtra("selftest", false) == true) bridge.selfTest()
     }
 
