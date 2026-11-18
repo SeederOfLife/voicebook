@@ -75,18 +75,20 @@ if ok:
     adb("input", "keyevent", "KEYCODE_HOME")
     time.sleep(2)
     adb("input", "keyevent", "KEYCODE_SLEEP")
-    say("screen off at passage", before["i"], "|", adb("dumpsys", "power").count("mWakefulness=Asleep") and "asleep" or "awake?")
+    time.sleep(3)
+    wake = [l.strip() for l in adb("dumpsys", "power").splitlines() if "mWakefulness=" in l or "Display Power: state=" in l]
+    say("screen off at passage", before["i"], "|", "; ".join(wake[:2]))
     say("notification:", "yes" if "app.voicebook" in adb("dumpsys", "notification", "--noredact") else "no")
     t1 = time.time()
     after = before
-    while time.time() - t1 < 200:
+    # Watch for two minutes: long enough for the phone to throttle a page that isn't kept alive.
+    while time.time() - t1 < 130:
         time.sleep(10)
         after = state()
-        if after["i"] >= before["i"] + 2:
-            break
+        say(f"  screen off {time.time() - t1:4.0f}s:", json.dumps(after))
     say("after", round(time.time() - t1), "s with the screen off:", json.dumps(after))
     adb("input", "keyevent", "KEYCODE_WAKEUP")
-    if not (after["i"] > before["i"] and after["playing"]):
+    if not (after["i"] >= before["i"] + 3 and after["playing"]):
         say("reading did NOT continue with the screen off")
         ok = False
     else:
