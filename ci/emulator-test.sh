@@ -18,10 +18,15 @@ done
 adb logcat -d -s VBTEST:* Voicebook:* > out/vbtest.txt
 adb exec-out screencap -p > out/screen-2-after.png
 adb pull /sdcard/Android/data/app.voicebook/files/selftest.wav out/selftest.wav || true
-# Open the sample story in the page and screenshot it.
-adb shell input tap 540 1500 || true
-sleep 3
-adb exec-out screencap -p > out/screen-3.png
+# Drive the page in the app: sample story, phone voice, play.
+if [ "$status" = "ok" ]; then
+  pid=$(adb shell pidof app.voicebook | tr -d '\r')
+  adb forward tcp:9222 localabstract:webview_devtools_remote_$pid
+  python3 -m pip install -q --break-system-packages websocket-client || python3 -m pip install -q websocket-client
+  (sleep 60; adb exec-out screencap -p > out/screen-3-reading.png) &
+  python3 ci/webview-test.py || status="webview-failed"
+  wait
+fi
 adb logcat -d > out/logcat.txt
 echo "$status" > out/result.txt
 cat out/vbtest.txt | tail -20
