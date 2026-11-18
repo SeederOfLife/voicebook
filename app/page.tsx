@@ -12,6 +12,7 @@ import { hash } from "@/lib/voices";
 import { DEVICE_KINDS, TIERS, TIER_ORDER, type DeviceKind, type Tier } from "@/lib/builtin";
 import { ANDROID_APK_URL, inAndroidApp, NATIVE_TIERS, type FoundFile, type NativeTier, type ScanResult } from "@/lib/native";
 import { LibraryView } from "./library-view";
+import { ShareDialog } from "./share-dialog";
 import { shelfFor } from "@/lib/shelf";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
@@ -248,6 +249,7 @@ export default function Home() {
 
   const [importNote, setImportNote] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanResult | null>(null);
+  const [sharingOpen, setSharingOpen] = useState(false);
 
   /** Add books to the library without opening them (several at once). */
   const importFiles = async (files: File[], source?: string) => {
@@ -473,11 +475,12 @@ export default function Home() {
               )}
 
               {importNote && <p className="muted small notice">{importNote}</p>}
-              {e?.native.available && e.native.canScan && (
-                <div className="row gap import-row">
+              <div className="row gap import-row">
+                {e?.native.available && e.native.canScan && (
                   <button className="btn" disabled={!!busy} onClick={() => e.native.scanFolder()}>📱 Find books on this phone</button>
-                </div>
-              )}
+                )}
+                <button className="btn" onClick={() => setSharingOpen(true)}>⇄ Share with another device</button>
+              </div>
 
               <button className="dropzone" onClick={() => fileRef.current?.click()} disabled={!!busy}
                 onDragOver={(x) => x.preventDefault()}
@@ -843,6 +846,7 @@ export default function Home() {
       )}
 
       {/* ---------- Modals ---------- */}
+      {sharingOpen && <ShareDialog books={books} onClose={() => setSharingOpen(false)} onReceived={refreshBooks} />}
       {scan && e && (
         <ScanDialog
           scan={scan}

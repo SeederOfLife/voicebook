@@ -325,3 +325,7 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .import-row { margin: 10px 0; justify-content: center; }
 label.voice-row { cursor: pointer; }
 .install-card a.btn { display: inline-block; margin: 4px 0 8px; text-decoration: none; }
+.share-code { text-align: center; display: grid; gap: 6px; justify-items: center; }
+.share-code .code { font-size: 2.6rem; letter-spacing: 0.12em; font-weight: 700; color: var(--accent); margin: 4px 0; font-variant-numeric: tabular-nums; }
+.code-input { font-size: 1.8rem; text-align: center; letter-spacing: 0.15em; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; color: inherit; width: 100%; box-sizing: border-box; }
+.import-row { flex-wrap: wrap; }
