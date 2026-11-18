@@ -312,3 +312,16 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .wait-bar { display: inline-block; width: 70px; height: 5px; border-radius: 3px; background: #ffffff1c; overflow: hidden; }
 .wait-bar span { display: block; height: 100%; background: var(--accent); transition: width 0.9s linear; }
 .ahead { white-space: nowrap; }
+
+/* Library */
+.lib-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+.lib-tools { display: flex; gap: 8px; margin: 6px 0 10px; }
+.lib-tools input { flex: 1; min-width: 0; background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; color: inherit; font: inherit; }
+.lib-tools select { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 8px 10px; color: inherit; font: inherit; }
+.shelf { margin: 6px 0; }
+.shelf > summary { cursor: pointer; padding: 8px 0; font-weight: 600; list-style: none; }
+.shelf > summary::before { content: "▸ "; color: var(--accent); }
+.shelf[open] > summary::before { content: "▾ "; }
+.import-row { margin: 10px 0; justify-content: center; }
+label.voice-row { cursor: pointer; }
+.install-card a.btn { display: inline-block; margin: 4px 0 8px; text-decoration: none; }

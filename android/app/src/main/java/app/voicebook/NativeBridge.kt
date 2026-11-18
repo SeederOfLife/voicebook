@@ -2,6 +2,7 @@ package app.voicebook
 
 import android.content.Intent
 import android.net.Uri
+import android.provider.DocumentsContract
 import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebResourceResponse
@@ -24,6 +25,10 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         private val speakQueue = Executors.newSingleThreadExecutor()
         private val downloads = Executors.newSingleThreadExecutor()
         private val audio = ConcurrentHashMap<String, File>()
+        private val scanQueue = Executors.newSingleThreadExecutor()
+        /** Books found on the phone: id → document address (read when the page asks for it). */
+        private val found = ConcurrentHashMap<String, Uri>()
+        private val BOOK = Regex("""\.(pdf|epub|txt|md|markdown|html?)$""", RegexOption.IGNORE_CASE)
         fun engine(ctx: android.content.Context): VoiceEngine =
             shared ?: synchronized(this) { shared ?: VoiceEngine(ctx.applicationContext).also { shared = it } }
     }
@@ -90,9 +95,84 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         act.runOnUiThread { act.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
     }
 
-    /** Serves generated audio to the page. */
+    /** Choose a folder on the phone (Download, Books…) and look for books in it. */
+    @JavascriptInterface
+    fun scanFolder() {
+        act.runOnUiThread { act.pickFolder() }
+    }
+
+    /** Look again in every folder chosen before (new books since last time). */
+    @JavascriptInterface
+    fun rescan() {
+        val trees = act.contentResolver.persistedUriPermissions.filter { it.isReadPermission }.map { it.uri }
+        if (trees.isNotEmpty()) scan(trees, true)
+    }
+
+    @JavascriptInterface
+    fun forgetFolders() {
+        for (p in act.contentResolver.persistedUriPermissions) {
+            try { act.contentResolver.releasePersistableUriPermission(p.uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Throwable) {}
+        }
+    }
+
+    private fun folderName(tree: Uri): String =
+        DocumentsContract.getTreeDocumentId(tree).substringAfterLast(':').substringAfterLast('/').ifBlank { "Phone" }
+
+    fun scan(trees: List<Uri>, auto: Boolean) {
+        scanQueue.execute {
+            val files = org.json.JSONArray()
+            val folders = org.json.JSONArray()
+            for (tree in trees) {
+                val top = folderName(tree)
+                folders.put(top)
+                try {
+                    walk(tree, DocumentsContract.getTreeDocumentId(tree), top, 0, files)
+                } catch (e: Throwable) {
+                    Log.w(VoiceEngine.TAG, "scan failed for $tree", e)
+                }
+            }
+            emit("scan", JSONObject().put("auto", auto).put("folders", folders).put("files", files))
+        }
+    }
+
+    private fun walk(tree: Uri, docId: String, folder: String, depth: Int, out: org.json.JSONArray) {
+        if (out.length() >= 3000) return
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, docId)
+        val cols = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE, DocumentsContract.Document.COLUMN_SIZE,
+            DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+        )
+        act.contentResolver.query(children, cols, null, null, null)?.use { c ->
+            while (c.moveToNext()) {
+                val id = c.getString(0) ?: continue
+                val name = c.getString(1) ?: continue
+                val mime = c.getString(2) ?: ""
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (depth < 6 && !name.startsWith(".") && name != "Android") walk(tree, id, "$folder/$name", depth + 1, out)
+                } else if (BOOK.containsMatchIn(name) && !name.startsWith(".")) {
+                    val key = "f" + Integer.toHexString((tree.toString() + id).hashCode())
+                    found[key] = DocumentsContract.buildDocumentUriUsingTree(tree, id)
+                    out.put(JSONObject().put("id", key).put("name", name).put("size", if (c.isNull(3)) 0 else c.getLong(3))
+                        .put("modified", if (c.isNull(4)) 0 else c.getLong(4)).put("folder", folder))
+                }
+            }
+        }
+    }
+
+    /** Serves generated audio and books found on the phone to the page. */
     fun intercept(url: Uri): WebResourceResponse? {
         val path = url.path ?: return null
+        if (path.startsWith("/__native/file/")) {
+            val uri = found[path.removePrefix("/__native/file/")]
+            val headers = mapOf("Cache-Control" to "no-store", "Cross-Origin-Resource-Policy" to "same-origin")
+            return try {
+                val input = uri?.let { act.contentResolver.openInputStream(it) } ?: throw IllegalStateException("not found")
+                WebResourceResponse("application/octet-stream", null, 200, "OK", headers, input)
+            } catch (e: Throwable) {
+                WebResourceResponse("text/plain", "utf-8", 404, "Not Found", headers, "missing".byteInputStream())
+            }
+        }
         if (!path.startsWith("/__native/audio/")) return null
         val id = path.removePrefix("/__native/audio/").removeSuffix(".wav")
         val f = audio.remove(id)

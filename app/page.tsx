@@ -10,7 +10,9 @@ import { getSupabase } from "@/lib/supabase-browser";
 import { ACCENTS, type AppConfig, type Provider } from "@/lib/types";
 import { hash } from "@/lib/voices";
 import { DEVICE_KINDS, TIERS, TIER_ORDER, type DeviceKind, type Tier } from "@/lib/builtin";
-import { ANDROID_APK_URL, inAndroidApp, NATIVE_TIERS, type NativeTier } from "@/lib/native";
+import { ANDROID_APK_URL, inAndroidApp, NATIVE_TIERS, type FoundFile, type NativeTier, type ScanResult } from "@/lib/native";
+import { LibraryView } from "./library-view";
+import { shelfFor } from "@/lib/shelf";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
   studio: "Studio voice",
@@ -157,6 +159,14 @@ export default function Home() {
   useEffect(() => {
     const e = new ReaderEngine(() => setTick((t) => t + 1));
     engineRef.current = e;
+    // Books found on the phone: a chosen folder shows everything; the quiet check at start shows only new ones.
+    e.native.onScan = (r) => {
+      if (!r.auto) return setScan(r);
+      const done = importedSet();
+      const fresh = r.files.filter((f) => !done.has(importedKey(f.name, f.size)));
+      if (fresh.length) setScan({ ...r, files: fresh });
+    };
+    setTimeout(() => e.native.rescan(), 2500);
     (window as unknown as { __voicebook?: ReaderEngine }).__voicebook = e; // handy when troubleshooting
     let unsub: (() => void) | undefined;
     (async () => {
@@ -206,7 +216,7 @@ export default function Home() {
     return () => clearInterval(id);
   }, [waiting]);
 
-  const openBook = async (title: string, sections: { title: string; text: string }[]) => {
+  const openBook = async (title: string, sections: { title: string; text: string }[], author?: string) => {
     if (!e) return;
     const { chunks, chapters } = buildBook(sections);
     if (!chunks.length) {
@@ -220,8 +230,10 @@ export default function Home() {
       title,
       chunks,
       chapters,
+      author,
+      shelf: shelfFor(chunks),
       addedAt: Date.now(),
-      openedAt: Date.now(),
+      openedAt: Date.now() + 2000, // opened right away: not "new"
       position: { chunk: 0, offset: 0 },
     };
     if (!existing) await library.put(record);
@@ -234,12 +246,60 @@ export default function Home() {
     if (rec && e) await e.open(rec);
   };
 
+  const [importNote, setImportNote] = useState<string | null>(null);
+  const [scan, setScan] = useState<ScanResult | null>(null);
+
+  /** Add books to the library without opening them (several at once). */
+  const importFiles = async (files: File[], source?: string) => {
+    setLoadError(null);
+    let added = 0;
+    let known = 0;
+    const failed: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      setBusy(`Adding books… ${i + 1} of ${files.length}: ${f.name}`);
+      try {
+        const book = await extractText(f);
+        const { chunks, chapters } = buildBook(book.sections);
+        if (!chunks.length) throw new Error("no text");
+        const id = bookId(book.title, chunks.join("\n"));
+        if (await library.get(id)) known++;
+        else {
+          const now = Date.now();
+          await library.put({
+            id, title: book.title, author: book.author, chunks, chapters, addedAt: now, openedAt: now,
+            position: { chunk: 0, offset: 0 }, shelf: shelfFor(chunks), source,
+          });
+          added++;
+        }
+        rememberImported(f);
+      } catch {
+        failed.push(f.name);
+      }
+    }
+    setBusy(null);
+    refreshBooks();
+    setImportNote(
+      [
+        added ? `Added ${added} book${added > 1 ? "s" : ""} to your library.` : "",
+        known ? `${known} ${known > 1 ? "were" : "was"} already there.` : "",
+        failed.length ? `Couldn't read: ${failed.slice(0, 3).join(", ")}${failed.length > 3 ? "…" : ""} (scanned images or protected files).` : "",
+      ].filter(Boolean).join(" "),
+    );
+  };
+
+  const onFiles = (list: FileList | File[]) => {
+    const files = [...list];
+    if (files.length === 1) return onFile(files[0]);
+    if (files.length > 1) return importFiles(files);
+  };
+
   const onFile = async (file: File) => {
     setLoadError(null);
     setBusy("Reading file…");
     try {
       const book = await extractText(file, (p) => setBusy(`Reading PDF… ${Math.round(p * 100)}%`));
-      await openBook(book.title, book.sections);
+      await openBook(book.title, book.sections, book.author);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : "Could not read this file.");
     } finally {
@@ -400,51 +460,37 @@ export default function Home() {
           ) : (
             <>
               {books.length > 0 && (
-                <div className="library">
-                  <h3 className="section-label">Continue listening</h3>
-                  {books.map((b) => {
-                    const ch = [...b.chapters].reverse().find((c) => c.chunk <= b.position.chunk);
-                    const pct = Math.round((b.position.chunk / Math.max(1, b.total)) * 100);
-                    return (
-                      <div key={b.id} className="book-row">
-                        <button className="book-open" onClick={() => resumeBook(b.id)}>
-                          <span className="book-cover" style={{ background: `hsl(${hash(b.title) % 360} 35% 30%)` }}>
-                            {b.title[0]}
-                          </span>
-                          <span className="book-info">
-                            <strong>{b.title}</strong>
-                            <span className="muted small">{ch?.title ? `${ch.title} · ` : ""}{pct}% · {timeAgo(b.openedAt)}</span>
-                            <span className="mini-bar"><span style={{ width: `${pct}%` }} /></span>
-                          </span>
-                          <span className="resume">▶</span>
-                        </button>
-                        <button
-                          className="icon-btn subtle"
-                          aria-label={`Remove ${b.title}`}
-                          onClick={async () => {
-                            if (confirm(`Remove “${b.title}” from your library?`)) {
-                              await library.remove(b.id);
-                              refreshBooks();
-                            }
-                          }}
-                        >✕</button>
-                      </div>
-                    );
-                  })}
+                <LibraryView
+                  books={books}
+                  onOpen={resumeBook}
+                  onRemove={async (b) => {
+                    if (confirm(`Remove “${b.title}” from your library?`)) {
+                      await library.remove(b.id);
+                      refreshBooks();
+                    }
+                  }}
+                />
+              )}
+
+              {importNote && <p className="muted small notice">{importNote}</p>}
+              {e?.native.available && e.native.canScan && (
+                <div className="row gap import-row">
+                  <button className="btn" disabled={!!busy} onClick={() => e.native.scanFolder()}>📱 Find books on this phone</button>
                 </div>
               )}
 
               <button className="dropzone" onClick={() => fileRef.current?.click()} disabled={!!busy}
                 onDragOver={(x) => x.preventDefault()}
-                onDrop={(x) => { x.preventDefault(); const f = x.dataTransfer.files[0]; if (f) onFile(f); }}>
+                onDrop={(x) => { x.preventDefault(); if (x.dataTransfer.files.length) onFiles(x.dataTransfer.files); }}>
                 {busy ? <><div className="spinner" /> {busy}</> : <>
                   <span className="drop-icon">📖</span>
-                  <strong>Add a book</strong>
-                  <span className="muted small">PDF · EPUB · TXT · Markdown · HTML</span>
+                  <strong>Add books</strong>
+                  <span className="muted small">PDF · EPUB · TXT · several at once · from the phone, Drive or iCloud</span>
                 </>}
               </button>
               <input ref={fileRef} type="file" hidden accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm,application/pdf,text/plain"
-                onChange={(x) => { const f = x.target.files?.[0]; if (f) onFile(f); x.target.value = ""; }} />
+                multiple
+                onChange={(x) => { if (x.target.files?.length) onFiles(x.target.files); x.target.value = ""; }} />
 
               <div className="row gap">
                 <button className="btn" onClick={() => setShowPaste((s) => !s)}>Paste text</button>
@@ -797,6 +843,23 @@ export default function Home() {
       )}
 
       {/* ---------- Modals ---------- */}
+      {scan && e && (
+        <ScanDialog
+          scan={scan}
+          onClose={() => setScan(null)}
+          onImport={async (files) => {
+            setScan(null);
+            const read: File[] = [];
+            for (const f of files) {
+              setBusy(`Opening ${f.name}…`);
+              try {
+                read.push(await e.native.readFound(f));
+              } catch {}
+            }
+            await importFiles(read, files[0]?.folder.split("/")[0]);
+          }}
+        />
+      )}
       {voiceSheet && hasBook && <VoiceSheet e={e} speaker={voiceSheet} onClose={() => setVoiceSheet(null)} />}
       {showUpgrade && (
         <div className="modal-bg" onClick={() => (e.premiumPrompt = false, setTick((t) => t + 1))}>
@@ -1083,6 +1146,69 @@ function NativePanel({ e }: { e: ReaderEngine }) {
         </button>
       )}
       {info && <p className="muted">App version {info.version} · <a href={ANDROID_APK_URL}>get the newest app</a></p>}
+    </div>
+  );
+}
+
+const IMPORTED_KEY = "vb:imported-files";
+const importedKey = (name: string, size: number) => `${name}|${size}`;
+function importedSet(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(IMPORTED_KEY) ?? "[]"));
+  } catch {
+    return new Set();
+  }
+}
+function rememberImported(f: File) {
+  try {
+    const set = importedSet();
+    set.add(importedKey(f.name, f.size));
+    localStorage.setItem(IMPORTED_KEY, JSON.stringify([...set].slice(-5000)));
+  } catch {}
+}
+
+/** Books found in a folder on the phone: pick which ones go into the library. */
+function ScanDialog({ scan, onClose, onImport }: { scan: ScanResult; onClose: () => void; onImport: (f: FoundFile[]) => void }) {
+  const done = importedSet();
+  const fresh = (f: FoundFile) => !done.has(importedKey(f.name, f.size));
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(scan.files.filter(fresh).map((f) => f.id)));
+  const byFolder = new Map<string, FoundFile[]>();
+  for (const f of scan.files) byFolder.set(f.folder, [...(byFolder.get(f.folder) ?? []), f]);
+  const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const mb = (n: number) => (n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+  return (
+    <div className="modal-bg sheet-bg" onClick={onClose}>
+      <div className="card modal voice-sheet" onClick={(x) => x.stopPropagation()} role="dialog" aria-label="Books found">
+        <div className="row between">
+          <h3>{scan.files.length ? `${scan.files.length} book${scan.files.length > 1 ? "s" : ""} found` : "No books found"}</h3>
+          <button className="icon small-icon" onClick={onClose} aria-label="Close">✕</button>
+        </div>
+        <p className="muted small">
+          In {scan.folders.join(", ")}. PDF, EPUB and text files{scan.files.some((f) => !fresh(f)) ? "; the ones already in your library are not ticked" : ""}.
+        </p>
+        <div className="row gap">
+          <button className="link-btn" onClick={() => setPicked(new Set(scan.files.map((f) => f.id)))}>Select all</button>
+          <button className="link-btn" onClick={() => setPicked(new Set())}>None</button>
+        </div>
+        <div className="voice-list">
+          {[...byFolder].map(([folder, files]) => (
+            <div key={folder}>
+              <p className="muted small voice-group">📁 {folder}</p>
+              {files.map((f) => (
+                <label key={f.id} className={`voice-row${picked.has(f.id) ? " chosen" : ""}`}>
+                  <span className="voice-name">
+                    <input type="checkbox" checked={picked.has(f.id)} onChange={() => toggle(f.id)} /> {f.name.replace(/\.[^.]+$/, "")}
+                  </span>
+                  <span className="muted small">{f.name.split(".").pop()?.toUpperCase()} · {mb(f.size)}{fresh(f) ? "" : " · already added"}</span>
+                </label>
+              ))}
+            </div>
+          ))}
+        </div>
+        <button className="btn primary" disabled={!picked.size} onClick={() => onImport(scan.files.filter((f) => picked.has(f.id)))}>
+          Add {picked.size} book{picked.size === 1 ? "" : "s"} to my library
+        </button>
+      </div>
     </div>
   );
 }

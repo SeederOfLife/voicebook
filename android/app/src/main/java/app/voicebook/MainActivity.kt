@@ -27,6 +27,7 @@ class MainActivity : Activity() {
         const val HOST = "voicebook-lake.vercel.app"
         const val START_URL = "https://$HOST/"
         private const val PICK_FILE = 42
+        private const val PICK_FOLDER = 43
     }
 
     private lateinit var web: WebView
@@ -85,6 +86,8 @@ class MainActivity : Activity() {
                 fileCallback = callback
                 val pick = Intent(Intent.ACTION_GET_CONTENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
                     .putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("application/pdf", "application/epub+zip", "text/*", "application/octet-stream"))
+                // Several books at once, from the phone or Google Drive (shown in the same picker).
+                if (params.mode == FileChooserParams.MODE_OPEN_MULTIPLE) pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 return try {
                     startActivityForResult(Intent.createChooser(pick, "Open a book"), PICK_FILE); true
                 } catch (_: Throwable) {
@@ -111,6 +114,14 @@ class MainActivity : Activity() {
         if (savedInstanceState == null && intent?.getBooleanExtra("selftest", false) == true) bridge.selfTest()
     }
 
+    /** System folder chooser (the app may then read that folder, and only that folder). */
+    fun pickFolder() {
+        try {
+            @Suppress("DEPRECATION")
+            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_FOLDER)
+        } catch (_: Throwable) {}
+    }
+
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         web.saveState(outState)
@@ -119,8 +130,20 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         if (requestCode == PICK_FILE) {
-            fileCallback?.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(resultCode, data))
+            val clip = data?.clipData
+            val picked: Array<Uri>? = if (resultCode == RESULT_OK && clip != null && clip.itemCount > 0)
+                Array(clip.itemCount) { clip.getItemAt(it).uri }
+            else WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+            fileCallback?.onReceiveValue(picked)
             fileCallback = null
+            return
+        }
+        if (requestCode == PICK_FOLDER) {
+            val tree = data?.data
+            if (resultCode == RESULT_OK && tree != null) {
+                try { contentResolver.takePersistableUriPermission(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION) } catch (_: Throwable) {}
+                bridge.scan(listOf(tree), false)
+            }
             return
         }
         @Suppress("DEPRECATION")

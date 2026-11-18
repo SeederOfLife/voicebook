@@ -11,6 +11,24 @@ interface Bridge {
   speak(id: string, tier: string, text: string, sid: number, speed: number): void;
   setPlaying(playing: boolean, title: string, subtitle: string): void;
   openExternal(url: string): void;
+  scanFolder?(): void;
+  rescan?(): void;
+  forgetFolders?(): void;
+}
+
+/** A book file found in a folder on the phone. */
+export interface FoundFile {
+  id: string;
+  name: string;
+  size: number;
+  modified: number;
+  folder: string;
+}
+
+export interface ScanResult {
+  auto: boolean;
+  folders: string[];
+  files: FoundFile[];
 }
 
 interface TierStatus {
@@ -59,6 +77,8 @@ export class NativeVoice {
   error: string | null = null;
   private pending = new Map<string, { resolve: (b: Blob) => void; reject: (e: Error) => void }>();
   private seq = 0;
+  /** Called with the books found when a folder scan finishes. */
+  onScan: ((r: ScanResult) => void) | null = null;
 
   constructor(private onChange: () => void) {
     const b = bridge();
@@ -127,6 +147,30 @@ export class NativeVoice {
     bridge()?.remove(t);
   }
 
+  /** Scanning folders needs the newer app (version with folder access). */
+  get canScan() {
+    return typeof bridge()?.scanFolder === "function";
+  }
+
+  scanFolder() {
+    bridge()?.scanFolder?.();
+  }
+
+  rescan() {
+    bridge()?.rescan?.();
+  }
+
+  forgetFolders() {
+    bridge()?.forgetFolders?.();
+  }
+
+  /** The bytes of a book found on the phone, as a File ready to import. */
+  async readFound(f: FoundFile): Promise<File> {
+    const r = await fetch(`/__native/file/${f.id}`);
+    if (!r.ok) throw new Error(`couldn't open ${f.name}`);
+    return new File([await r.blob()], f.name, { lastModified: f.modified || Date.now() });
+  }
+
   setPlaying(playing: boolean, title: string, subtitle: string) {
     try {
       bridge()?.setPlaying(playing, title, subtitle);
@@ -168,6 +212,9 @@ export class NativeVoice {
     } else if (type === "downloadError") {
       this.refresh();
       this.error = `The phone voice couldn't download: ${d.error}`;
+    } else if (type === "scan") {
+      this.onScan?.(d as unknown as ScanResult);
+      return;
     } else if (type === "result") {
       const job = this.pending.get(String(d.id));
       if (!job) return;

@@ -1,3 +1,4 @@
+import { shelfFor, type Shelf } from "./shelf";
 // The user's library, stored on the device (IndexedDB): books, chapters, the exact
 // place you paused, the voices you picked, and the audio that was already generated
 // (so nothing is ever generated twice and saved passages play without a connection).
@@ -14,6 +15,11 @@ export interface BookRecord {
   characters?: Character[];
   /** The whole book was scanned for its characters. */
   scanned?: boolean;
+  author?: string;
+  /** Library shelf (stories, guides, …). */
+  shelf?: Shelf;
+  /** Where it came from, e.g. "Download" (a folder on the phone) or a file name. */
+  source?: string;
   meta?: { genre: string; language: string; narrationStyle: string };
   casting?: Partial<Record<Provider, Record<string, string>>>;
   accents?: Record<string, string>;
@@ -26,7 +32,12 @@ export interface VoiceTweak {
   speed: number;
 }
 
-export type BookSummary = Pick<BookRecord, "id" | "title" | "openedAt" | "position" | "chapters"> & { total: number };
+export type BookSummary = Pick<BookRecord, "id" | "title" | "openedAt" | "addedAt" | "position" | "chapters" | "author" | "source"> & {
+  total: number;
+  shelf: Shelf;
+  /** Opened at least once (books imported in bulk are "new" until then) */
+  started: boolean;
+};
 
 const DB = "voicebook";
 const STORE = "books";
@@ -159,7 +170,19 @@ export const library = {
       const all = (await tx("readonly", (s) => s.getAll())) as BookRecord[];
       return all
         .sort((a, b) => b.openedAt - a.openedAt)
-        .map(({ id, title, openedAt, position, chapters, chunks }) => ({ id, title, openedAt, position, chapters, total: chunks.length }));
+        .map(({ id, title, openedAt, addedAt, position, chapters, chunks, author, source, shelf }) => ({
+          id,
+          title,
+          openedAt,
+          addedAt,
+          position,
+          chapters,
+          author,
+          source,
+          total: chunks.length,
+          shelf: shelf ?? shelfFor(chunks),
+          started: openedAt > addedAt + 1000 || position.chunk > 0 || position.offset > 0,
+        }));
     } catch {
       return [];
     }

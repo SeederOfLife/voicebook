@@ -3,8 +3,26 @@ import { detectSections, type Section } from "./chunk";
 
 export interface ExtractedBook {
   title: string;
+  author?: string;
   sections: Section[];
 }
+
+/** "Jane Austen - Pride and Prejudice" → author + title (when the file has no details inside). */
+function fromFileName(name: string): { title: string; author?: string } {
+  const raw = name.replace(/\.[^.]+$/, "").trim();
+  const m = /^(.{3,40}?)\s+[-–—]\s+(.{2,})$/.exec(raw);
+  if (m && /^[A-Z][\p{L}.'’ ]+$/u.test(m[1]) && m[1].split(" ").length <= 4)
+    return { author: m[1].trim(), title: baseName(m[2]) };
+  return { title: baseName(name) };
+}
+
+/** Details written inside a PDF are often junk ("Microsoft Word - doc1.docx"): keep only plausible ones. */
+const plausible = (v: unknown): string | undefined => {
+  const t = typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "";
+  if (t.length < 2 || t.length > 120) return undefined;
+  if (/\.(docx?|pdf|indd|tex|rtf|odt)$|^(untitled|microsoft|document|title|unknown|author|user|admin)\b/i.test(t)) return undefined;
+  return t;
+};
 
 const baseName = (n: string) => n.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ").trim();
 
@@ -18,10 +36,18 @@ function tidy(text: string): string {
     .trim();
 }
 
+let pdfMeta: { title?: string; author?: string } = {};
+
 async function pdfSections(file: File, onProgress?: (p: number) => void): Promise<Section[]> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
   pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
   const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  try {
+    const info = ((await doc.getMetadata()).info ?? {}) as { Title?: unknown; Author?: unknown };
+    pdfMeta = { title: plausible(info.Title), author: plausible(info.Author) };
+  } catch {
+    pdfMeta = {};
+  }
   const pages: string[] = [];
   for (let i = 1; i <= doc.numPages; i++) {
     const page = await doc.getPage(i);
@@ -103,7 +129,8 @@ async function epubText(file: File): Promise<ExtractedBook> {
   const opf = await zip.file(opfPath)!.async("string");
   const dir = opfPath.includes("/") ? opfPath.slice(0, opfPath.lastIndexOf("/") + 1) : "";
   const xml = new DOMParser().parseFromString(opf, "application/xml");
-  const title = xml.getElementsByTagName("dc:title")[0]?.textContent?.trim() || baseName(file.name);
+  const title = xml.getElementsByTagName("dc:title")[0]?.textContent?.trim() || fromFileName(file.name).title;
+  const author = plausible(xml.getElementsByTagName("dc:creator")[0]?.textContent) ?? fromFileName(file.name).author;
   const manifest = new Map<string, string>();
   Array.from(xml.getElementsByTagName("item")).forEach((it) =>
     manifest.set(it.getAttribute("id") ?? "", it.getAttribute("href") ?? ""),
@@ -133,7 +160,7 @@ async function epubText(file: File): Promise<ExtractedBook> {
   }
   if (carry) sections.push({ title: `Chapter ${sections.length + 1}`, text: carry });
   if (!sections.length) throw new Error("No readable text in this EPUB");
-  return { title, sections };
+  return { title, author, sections };
 }
 
 function markdownToText(md: string): string {
@@ -148,11 +175,15 @@ function markdownToText(md: string): string {
 
 export async function extractText(file: File, onProgress?: (p: number) => void): Promise<ExtractedBook> {
   const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
-  const title = baseName(file.name);
-  if (ext === "pdf" || file.type === "application/pdf") return { title, sections: await pdfSections(file, onProgress) };
+  const named = fromFileName(file.name);
+  const { title, author } = named;
+  if (ext === "pdf" || file.type === "application/pdf") {
+    const sections = await pdfSections(file, onProgress);
+    return { title: pdfMeta.title ?? title, author: pdfMeta.author ?? author, sections };
+  }
   if (ext === "epub") return epubText(file);
   const raw = await file.text();
-  if (ext === "html" || ext === "htm") return { title, sections: detectSections(tidy(htmlToText(raw))) };
-  if (ext === "md" || ext === "markdown") return { title, sections: detectSections(tidy(markdownToText(raw))) };
-  return { title, sections: detectSections(tidy(raw)) };
+  if (ext === "html" || ext === "htm") return { title, author, sections: detectSections(tidy(htmlToText(raw))) };
+  if (ext === "md" || ext === "markdown") return { title, author, sections: detectSections(tidy(markdownToText(raw))) };
+  return { title, author, sections: detectSections(tidy(raw)) };
 }
