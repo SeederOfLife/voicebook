@@ -36,7 +36,13 @@ button:disabled { opacity: 0.5; cursor: default; }
 .top {
   position: sticky; top: 0; z-index: 10;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px 0; background: linear-gradient(var(--bg) 70%, transparent);
+  padding: 14px 0; background: linear-gradient(var(--bg) 82%, transparent);
+  flex-wrap: nowrap;
+}
+.top > * { min-width: 0; }
+@media (max-width: 380px) {
+  .top .logo { font-size: 1.1rem; }
+  .top .provider { max-width: 48vw; font-size: 0.8rem; }
 }
 .logo { font-family: var(--serif); font-size: 1.35rem; font-style: italic; letter-spacing: 0.01em; }
 .logo-btn { background: none; border: 0; padding: 0; }

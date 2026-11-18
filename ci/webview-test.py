@@ -1,6 +1,6 @@
 """Drives the Voicebook page inside the Android app (WebView, via Chrome DevTools)
 and checks that the phone voice reads passage after passage."""
-import json, sys, time, urllib.request
+import json, subprocess, sys, time, urllib.request
 import websocket  # pip install websocket-client
 
 out = open("out/webview.txt", "w")
@@ -65,5 +65,31 @@ while time.time() - t0 < 240:
     if d["i"] >= 6 and d["by"] == "native":
         ok = True
         break
+def state():
+    return json.loads(ev("(() => { const e = window.__voicebook; return JSON.stringify({i: e.index, by: e.spokenBy, buf: e.buffering, playing: e.playing, err: e.error}); })()"))
+
+if ok:
+    # Screen off: leave the app (Home) and put the phone to sleep, then see whether reading goes on.
+    adb = lambda *a: subprocess.run(["adb", "shell", *a], capture_output=True, text=True).stdout
+    before = state()
+    adb("input", "keyevent", "KEYCODE_HOME")
+    time.sleep(2)
+    adb("input", "keyevent", "KEYCODE_SLEEP")
+    say("screen off at passage", before["i"], "|", adb("dumpsys", "power").count("mWakefulness=Asleep") and "asleep" or "awake?")
+    say("notification:", "yes" if "app.voicebook" in adb("dumpsys", "notification", "--noredact") else "no")
+    t1 = time.time()
+    after = before
+    while time.time() - t1 < 200:
+        time.sleep(10)
+        after = state()
+        if after["i"] >= before["i"] + 2:
+            break
+    say("after", round(time.time() - t1), "s with the screen off:", json.dumps(after))
+    adb("input", "keyevent", "KEYCODE_WAKEUP")
+    if not (after["i"] > before["i"] and after["playing"]):
+        say("reading did NOT continue with the screen off")
+        ok = False
+    else:
+        say("reading continued with the screen off")
 say("RESULT", "ok" if ok else "failed")
 sys.exit(0 if ok else 1)

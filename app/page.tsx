@@ -17,7 +17,7 @@ const PROVIDER_LABEL: Record<Provider, string> = {
   elevenlabs: "ElevenLabs · acting voices",
   openai: "OpenAI · acting voices",
   builtin: "On-device AI voice",
-  native: "Phone AI voice · fastest, offline",
+  native: "Phone AI voice",
   browser: "Device voice · basic",
 };
 
@@ -451,6 +451,22 @@ export default function Home() {
                 <button className="btn" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>Try a sample story</button>
               </div>
               {!installed && !inAndroidApp() && <InstallCard evt={installEvt} />}
+              {inAndroidApp() && !e.native.ready && (
+                <div className="install-card small">
+                  <p>
+                    <strong>📱 Phone AI voice</strong>
+                    <br />
+                    <span className="muted">The studio voice made by this phone itself: offline, no limit, keeps reading with the screen off. One download.</span>
+                  </p>
+                  {e.native.downloading ? (
+                    <p className="muted">Downloading… {Math.round(e.native.progress * 100)}% (keep the app open)</p>
+                  ) : (
+                    <button className="btn primary" onClick={() => { e.native.download(); e.setProvider("native"); }}>
+                      Download ({e.native.status()?.mb ?? "?"} MB, {e.native.tier === "best" ? "best quality" : "fast"})
+                    </button>
+                  )}
+                </div>
+              )}
               {showPaste && (
                 <div className="paste">
                   <textarea value={paste} onChange={(x) => setPaste(x.target.value)} placeholder="Paste any text here…" rows={8} />
