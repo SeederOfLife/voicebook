@@ -140,3 +140,30 @@ Choose **On-device AI voice** in the engine menu. The voice is made by the liste
 | Best | 326 MB | Kokoro v1.0, full precision, WebGPU when available | powerful computers |
 
 Voices are downloaded from Hugging Face once and kept in the browser's storage ("Delete downloaded voices" removes them). On phones, if the page closes while a bigger size loads, the app goes back to Light by itself next time.
+
+## Android app (APK)
+
+`android/` is a small native Android app around the web app (a full-screen WebView on
+`voicebook-lake.vercel.app`, so it updates with every deploy) that adds:
+
+- **Phone AI voice**: the studio voice (Kokoro v1.0) running natively through
+  [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) on up to 4 processor cores.
+  Two sizes, downloaded once inside the app: *Fast* (8-bit, 132 MB) and *Best*
+  (full precision, 350 MB, suggested on phones with 6 GB+ memory). Works offline,
+  no monthly limit.
+- **Reading with the screen off**: a foreground service with a pause/play
+  notification and a wake lock.
+- File picker for books; the back button keeps reading in the background.
+
+Every push to `android/` (or the workflow) runs `.github/workflows/android.yml`:
+it builds signed APKs, publishes them on the
+[`android` release](https://github.com/SeederOfLife/voicebook/releases/tag/android)
+(`voicebook.apk` for nearly all phones, `voicebook-older-phones.apk` for 32-bit
+ones), then installs the app on an Android emulator, runs a native-voice
+self-test, plays the sample story with the phone voice, turns the screen off
+and checks that reading continues. Screenshots, the voice sample and logs go to
+the `ci-check` release.
+
+Install on a phone: open the APK link on the phone, download, open the file and
+allow installing from this source. New versions install over the old one (same
+signing key, `android/app/voicebook.keystore`).
