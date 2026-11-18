@@ -66,7 +66,7 @@ while time.time() - t0 < 240:
         ok = True
         break
 def state():
-    return json.loads(ev("(() => { const e = window.__voicebook; return JSON.stringify({i: e.index, by: e.spokenBy, buf: e.buffering, playing: e.playing, err: e.error}); })()"))
+    return json.loads(ev("(() => { const e = window.__voicebook; return JSON.stringify({i: e.index, of: e.segments.length, by: e.spokenBy, buf: e.buffering, playing: e.playing, err: e.error}); })()"))
 
 if ok:
     # Screen off: leave the app (Home) and put the phone to sleep, then see whether reading goes on.
@@ -86,9 +86,14 @@ if ok:
         time.sleep(10)
         after = state()
         say(f"  screen off {time.time() - t1:4.0f}s:", json.dumps(after))
+        if not after["playing"]:
+            break
     say("after", round(time.time() - t1), "s with the screen off:", json.dumps(after))
     adb("input", "keyevent", "KEYCODE_WAKEUP")
-    if not (after["i"] >= before["i"] + 3 and after["playing"]):
+    finished = not after["playing"] and not after["err"] and after["i"] >= after["of"] - 2
+    if finished:
+        say("read to the end of the story with the screen off")
+    if not (after["i"] >= before["i"] + 3 and (after["playing"] or finished)):
         say("reading did NOT continue with the screen off")
         ok = False
     else:
