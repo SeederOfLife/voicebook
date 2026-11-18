@@ -208,8 +208,30 @@ class VoiceEngine(private val ctx: Context) {
         val took = (System.nanoTime() - started) / 1e9
         val seconds = samples.size.toDouble() / audio.sampleRate
         Log.i(TAG, "spoke ${text.length} chars: %.1f s of audio in %.1f s on $threads threads".format(seconds, took))
+        // The 8-bit model whistles at 4.8 and 9.6 kHz (measured); two narrow notches remove it.
+        if (id == "fast") {
+            notch(samples, audio.sampleRate, 9600.0, 6.0)
+            notch(samples, audio.sampleRate, 4800.0, 8.0)
+        }
         writeWav(out, samples, audio.sampleRate)
         return seconds
+    }
+
+    /** In-place biquad notch filter (removes one narrow frequency, leaves the voice). */
+    private fun notch(x: FloatArray, rate: Int, f0: Double, q: Double) {
+        if (f0 >= rate / 2.0) return
+        val w = 2 * Math.PI * f0 / rate
+        val alpha = Math.sin(w) / (2 * q)
+        val c = Math.cos(w)
+        val a0 = 1 + alpha
+        val b0 = 1 / a0; val b1 = -2 * c / a0; val b2 = 1 / a0; val a1 = -2 * c / a0; val a2 = (1 - alpha) / a0
+        var x1 = 0.0; var x2 = 0.0; var y1 = 0.0; var y2 = 0.0
+        for (i in x.indices) {
+            val v = x[i].toDouble()
+            val o = b0 * v + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            x2 = x1; x1 = v; y2 = y1; y1 = o
+            x[i] = o.toFloat()
+        }
     }
 
     private fun writeWav(file: File, samples: FloatArray, rate: Int) {

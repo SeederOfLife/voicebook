@@ -769,7 +769,7 @@ export class ReaderEngine {
   private keyOf(provider: Provider, voice: string, text: string, tailMs: number, seg: Segment): string {
     if (provider === "studio") return `studio|${voice}|${tailMs}|${hash53(text)}`;
     if (provider === "builtin") return `builtin-${this.builtin.tier}|${voice}|${hash53(text)}`;
-    if (provider === "native") return `native-${this.native.tier}|${voice}|${hash53(text)}`;
+    if (provider === "native") return `native2-${this.native.tier}|${voice}|${hash53(text)}`; // 2: without the whistle
     if (provider === "browser") return `${provider}|${voice}|${hash53(text)}`;
     // Acting voices: everything that changes the performance is part of the identity.
     const acting = [seg.emotion, seg.delivery ?? "", (seg.tags ?? []).join(","), seg.intensity ?? 1, this.accents[seg.speaker] ?? ""].join("~");
