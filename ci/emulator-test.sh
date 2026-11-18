@@ -1,8 +1,9 @@
 #!/bin/bash
 # Installs the APK on the emulator, opens it, runs the native voice self-test and
 # collects screenshots, the generated voice sample and the logs into out/.
-set -x
 mkdir -p out
+exec > >(tee -a out/run.txt) 2>&1
+set -x
 adb logcat -c
 adb install -r voicebook-x86_64.apk || { echo "install failed" > out/result.txt; exit 1; }
 adb shell pm grant app.voicebook android.permission.POST_NOTIFICATIONS || true

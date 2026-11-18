@@ -3,8 +3,24 @@ and checks that the phone voice reads passage after passage."""
 import json, sys, time, urllib.request
 import websocket  # pip install websocket-client
 
-pages = json.load(urllib.request.urlopen("http://localhost:9222/json"))
-page = next(p for p in pages if p.get("type") == "page" and "voicebook" in p.get("url", ""))
+out = open("out/webview.txt", "w")
+def note(*a):
+    line = " ".join(str(x) for x in a)
+    print(line, flush=True)
+    out.write(line + "\n"); out.flush()
+
+pages = []
+for attempt in range(20):
+    try:
+        pages = json.load(urllib.request.urlopen("http://localhost:9222/json", timeout=10))
+        if any(p.get("type") == "page" for p in pages): break
+    except Exception as e:
+        note("devtools not ready:", e)
+    time.sleep(3)
+note("pages:", json.dumps([{k: p.get(k) for k in ("type", "url", "title")} for p in pages]))
+page = next((p for p in pages if p.get("type") == "page"), None)
+if not page:
+    note("RESULT failed: no page"); sys.exit(1)
 ws = websocket.create_connection(page["webSocketDebuggerUrl"], timeout=60)
 seq = 0
 
@@ -18,13 +34,15 @@ def ev(expr, wait=True):
             r = m.get("result", {}).get("result", {})
             return r.get("value", r.get("description"))
 
-log = []
-def say(*a):
-    line = " ".join(str(x) for x in a)
-    print(line, flush=True)
-    log.append(line)
+say = note
 
-say("page:", ev("location.href"), "| native bridge:", ev("typeof window.VBNative"))
+say("page:", ev("location.href"), "| title:", ev("document.title"), "| native bridge:", ev("typeof window.VBNative"))
+say("text:", ev("document.body ? document.body.innerText.slice(0, 300) : 'no body'"))
+say("browser:", ev("navigator.userAgent"))
+for i in range(10):
+    if ev("!!window.__voicebook"): break
+    time.sleep(3)
+say("app loaded:", ev("!!window.__voicebook"))
 say("app info:", ev("window.VBNative && window.VBNative.info()"))
 ev("[...document.querySelectorAll('button')].find(b => b.textContent.includes('Try a sample story'))?.click()")
 time.sleep(3)
@@ -48,5 +66,4 @@ while time.time() - t0 < 240:
         ok = True
         break
 say("RESULT", "ok" if ok else "failed")
-open("out/webview.txt", "w").write("\n".join(log))
 sys.exit(0 if ok else 1)
