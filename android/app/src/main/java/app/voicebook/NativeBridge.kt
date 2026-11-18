@@ -18,11 +18,18 @@ import java.util.concurrent.Executors
  * `/__native/audio/<id>.wav` (same origin as the page, so no CORS questions).
  */
 class NativeBridge(private val act: MainActivity, private val web: WebView) {
-    val engine = VoiceEngine(act.applicationContext)
-    private val speakQueue = Executors.newSingleThreadExecutor()
-    private val downloads = Executors.newSingleThreadExecutor()
-    private val audio = ConcurrentHashMap<String, File>()
-    private val outDir = File(act.cacheDir, "speech").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+    /** One engine and one set of worker threads for the whole app, even if the screen is rebuilt. */
+    companion object {
+        @Volatile private var shared: VoiceEngine? = null
+        private val speakQueue = Executors.newSingleThreadExecutor()
+        private val downloads = Executors.newSingleThreadExecutor()
+        private val audio = ConcurrentHashMap<String, File>()
+        fun engine(ctx: android.content.Context): VoiceEngine =
+            shared ?: synchronized(this) { shared ?: VoiceEngine(ctx.applicationContext).also { shared = it } }
+    }
+
+    val engine = engine(act)
+    private val outDir = File(act.cacheDir, "speech").apply { mkdirs() }
 
     private fun emit(type: String, data: JSONObject) {
         val js = "window.__vbNativeEvent && window.__vbNativeEvent(${JSONObject.quote(type)}, $data)"

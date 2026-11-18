@@ -106,7 +106,7 @@ class MainActivity : Activity() {
         }
 
         if (savedInstanceState != null) web.restoreState(savedInstanceState) else web.loadUrl(START_URL)
-        if (intent?.getBooleanExtra("selftest", false) == true) bridge.selfTest()
+        if (savedInstanceState == null && intent?.getBooleanExtra("selftest", false) == true) bridge.selfTest()
     }
 
     override fun onSaveInstanceState(outState: Bundle) {

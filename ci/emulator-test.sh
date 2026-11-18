@@ -4,7 +4,8 @@
 set -x
 mkdir -p out
 adb logcat -c
-adb install -r voicebook.apk || { echo "install failed" > out/result.txt; exit 1; }
+adb install -r voicebook-x86_64.apk || { echo "install failed" > out/result.txt; exit 1; }
+adb shell pm grant app.voicebook android.permission.POST_NOTIFICATIONS || true
 adb shell am start -n app.voicebook/.MainActivity --ez selftest true
 sleep 30
 adb exec-out screencap -p > out/screen-1-start.png
