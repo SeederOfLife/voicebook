@@ -90,6 +90,46 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         act.runOnUiThread { PlaybackService.update(act, playing, title, subtitle) }
     }
 
+    /** Download the newer app and open Android's install screen (one tap, keeps everything). */
+    @JavascriptInterface
+    fun installUpdate(url: String) {
+        downloads.execute {
+            try {
+                val dir = File(act.cacheDir, "updates").apply { mkdirs(); listFiles()?.forEach { it.delete() } }
+                val apk = File(dir, "voicebook-update.apk")
+                val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+                conn.connectTimeout = 20000
+                conn.readTimeout = 60000
+                if (conn.responseCode != 200) throw RuntimeException("download failed (HTTP ${conn.responseCode})")
+                val total = conn.contentLengthLong.coerceAtLeast(1)
+                var got = 0L
+                var last = 0L
+                conn.inputStream.use { input ->
+                    java.io.FileOutputStream(apk).use { out ->
+                        val buf = ByteArray(1 shl 16)
+                        while (true) {
+                            val n = input.read(buf)
+                            if (n < 0) break
+                            out.write(buf, 0, n)
+                            got += n
+                            val now = System.currentTimeMillis()
+                            if (now - last > 300) { last = now; emit("updateProgress", JSONObject().put("progress", got.toDouble() / total)) }
+                        }
+                    }
+                }
+                emit("updateProgress", JSONObject().put("progress", 1.0))
+                val uri = androidx.core.content.FileProvider.getUriForFile(act, act.packageName + ".files", apk)
+                act.runOnUiThread {
+                    act.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/vnd.android.package-archive")
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+            } catch (e: Throwable) {
+                Log.e(VoiceEngine.TAG, "update failed", e)
+                emit("updateError", JSONObject().put("error", e.message ?: e.toString()))
+            }
+        }
+    }
+
     @JavascriptInterface
     fun openExternal(url: String) {
         act.runOnUiThread { act.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }

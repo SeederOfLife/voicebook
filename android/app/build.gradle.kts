@@ -57,4 +57,5 @@ dependencies {
     // Native neural voice (sherpa-onnx with Kokoro). Downloaded by the build (see the workflow).
     implementation(files("libs/sherpa-onnx.aar"))
     implementation("org.apache.commons:commons-compress:1.27.1")
+    implementation("androidx.core:core:1.13.1")
 }

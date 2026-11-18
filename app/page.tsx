@@ -168,6 +168,7 @@ export default function Home() {
       if (fresh.length) setScan({ ...r, files: fresh });
     };
     setTimeout(() => e.native.rescan(), 2500);
+    setTimeout(() => void e.native.checkUpdate(), 4000);
     (window as unknown as { __voicebook?: ReaderEngine }).__voicebook = e; // handy when troubleshooting
     let unsub: (() => void) | undefined;
     (async () => {
@@ -509,12 +510,29 @@ export default function Home() {
                 <button className="btn" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>Try a sample story</button>
               </div>
               {!inAndroidApp() && (!installed || isAndroid()) && <InstallCard evt={installEvt} installed={installed} />}
+              {inAndroidApp() && e.native.update && (
+                <div className="install-card small">
+                  <p>
+                    <strong>⬆ Voicebook {e.native.update.versionName} is ready</strong>
+                    <br />
+                    <span className="muted">An update of the app itself. Your books, voices and places are kept.</span>
+                  </p>
+                  {e.native.updateError && <p className="error">{e.native.updateError}</p>}
+                  {e.native.updateProgress !== null ? (
+                    <p className="muted">
+                      {e.native.updateProgress < 1 ? `Downloading the update… ${Math.round(e.native.updateProgress * 100)}%` : "Tap “Update” on Android's screen to finish."}
+                    </p>
+                  ) : (
+                    <button className="btn primary" onClick={() => e.native.installUpdate()}>Update now</button>
+                  )}
+                </div>
+              )}
               {inAndroidApp() && !e.native.ready && (
                 <div className="install-card small">
                   <p>
-                    <strong>📱 Phone AI voice</strong>
+                    <strong>📱 Voice for offline listening</strong>
                     <br />
-                    <span className="muted">The studio voice made by this phone itself: offline, no limit, keeps reading with the screen off. One download.</span>
+                    <span className="muted">Reading uses the studio voice (best quality, needs internet). With this download, the phone makes the voice itself when there&apos;s no connection or the monthly limit is reached.</span>
                   </p>
                   {e.native.downloading ? (
                     <p className="muted">Downloading… {Math.round(e.native.progress * 100)}% (keep the app open)</p>

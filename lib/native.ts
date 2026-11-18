@@ -12,6 +12,7 @@ interface Bridge {
   setPlaying(playing: boolean, title: string, subtitle: string): void;
   openExternal(url: string): void;
   scanFolder?(): void;
+  installUpdate?(url: string): void;
   scanPhone?(): void;
   hasAllFiles?(): boolean;
   rescan?(): void;
@@ -79,6 +80,11 @@ export class NativeVoice {
   error: string | null = null;
   private pending = new Map<string, { resolve: (b: Blob) => void; reject: (e: Error) => void }>();
   private seq = 0;
+  /** A newer app on the website: { versionName, versionCode }. */
+  update: { versionName: string; versionCode: number } | null = null;
+  /** null = not updating, 0–1 = downloading the update. */
+  updateProgress: number | null = null;
+  updateError: string | null = null;
   /** Called with the books found when a folder scan finishes. */
   onScan: ((r: ScanResult) => void) | null = null;
 
@@ -147,6 +153,29 @@ export class NativeVoice {
 
   remove(t: NativeTier) {
     bridge()?.remove(t);
+  }
+
+  /** Is there a newer app on the website than this one? */
+  async checkUpdate() {
+    if (!this.info) return;
+    try {
+      const r = await fetch(`/download/version.json?t=${Date.now()}`, { cache: "no-store" });
+      const v = (await r.json()) as { versionName: string; versionCode: number };
+      this.update = v.versionCode > (this.info.versionCode ?? 0) ? v : null;
+      this.onChange();
+    } catch {}
+  }
+
+  /** One tap: the app downloads the update and opens Android's install screen. */
+  installUpdate() {
+    const b = bridge();
+    const url = `${location.origin}${ANDROID_APK_URL}`;
+    if (b?.installUpdate) {
+      this.updateProgress = 0;
+      this.updateError = null;
+      b.installUpdate(url);
+    } else b?.openExternal(url); // older app: the browser downloads it
+    this.onChange();
   }
 
   /** Scanning folders needs the newer app (version with folder access). */
@@ -225,6 +254,11 @@ export class NativeVoice {
     } else if (type === "downloadError") {
       this.refresh();
       this.error = `The phone voice couldn't download: ${d.error}`;
+    } else if (type === "updateProgress") {
+      this.updateProgress = Number(d.progress) || 0;
+    } else if (type === "updateError") {
+      this.updateProgress = null;
+      this.updateError = `The update couldn't download: ${d.error}`;
     } else if (type === "scan") {
       this.onScan?.(d as unknown as ScanResult);
       return;

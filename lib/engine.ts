@@ -195,6 +195,11 @@ const store = {
       localStorage.setItem(k, v);
     } catch {}
   },
+  remove(k: string) {
+    try {
+      localStorage.removeItem(k);
+    } catch {}
+  },
 };
 
 export class ReaderEngine {
@@ -320,9 +325,14 @@ export class ReaderEngine {
     this.config = c;
     // Without an AI key there is nothing to ask: split dialogue and narration locally.
     this.aiUnavailable = !c.providers.anthropic;
+    // Once: listeners who had the phone voice picked automatically go back to the studio voice.
+    if (!store.get("vb:studio-first")) {
+      store.set("vb:studio-first", "1");
+      if (store.get(ENGINE_KEY) === "native") store.remove(ENGINE_KEY);
+    }
     const saved = store.get(ENGINE_KEY) as Provider | null;
     const available = this.availableProviders();
-    const fallback = available[0] === "native" && !this.native.ready && available.includes("studio") ? "studio" : available[0];
+    const fallback = available[0];
     const next = saved && available.includes(saved) ? saved : fallback;
     if (next !== this.provider) {
       this.provider = next;
@@ -336,10 +346,12 @@ export class ReaderEngine {
   /** Engines this visitor can choose, best first. */
   availableProviders(): Provider[] {
     const p: Provider[] = [];
-    if (this.native?.available) p.push("native");
     if (this.premium && this.config?.providers.elevenlabs) p.push("elevenlabs");
     if (this.premium && this.config?.providers.openai) p.push("openai");
+    // The studio voice (full model on the server) sounds best: first choice whenever it's there.
     if (this.config?.providers.studio) p.push("studio");
+    // The phone voice: offline / when the monthly allowance is used up (it also stands in by itself).
+    if (this.native?.available) p.push("native");
     if (builtinSupported()) p.push("builtin");
     p.push("browser");
     return p;
