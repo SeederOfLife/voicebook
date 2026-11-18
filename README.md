@@ -167,3 +167,16 @@ the `ci-check` release.
 Install on a phone: open the APK link on the phone, download, open the file and
 allow installing from this source. New versions install over the old one (same
 signing key, `android/app/voicebook.keystore`).
+
+## AI casting (characters across books)
+
+With an AI key on the server (`GEMINI_API_KEY`, free from Google AI Studio, or
+`ANTHROPIC_API_KEY`), each book is cast once when opened: the on-device scan's
+names and sample lines go to the AI, which merges nicknames ("Paul", "Paul
+Atreides", "Muad'Dib"), drops non-characters, sets man/woman, age and a short
+description, and picks a voice for each character (`/api/cast`). The same AI
+also splits each part into narration and dialogue with emotions (`/api/analyze`).
+
+Voices are remembered per series (same author, or the same folder when the
+author is unknown): a character keeps the same voice in every book, and a voice
+chosen by hand is never replaced by the automatic casting.

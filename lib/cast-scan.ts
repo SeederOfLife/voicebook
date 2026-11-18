@@ -32,6 +32,8 @@ const FEMALE_TITLES = /^(Mrs|Ms|Miss|Lady|Aunt|Queen|Princess|Mother|Sister|Mada
 
 export interface ScannedCharacter extends Character {
   lines: number;
+  /** A few things they say (helps the AI casting) */
+  samples?: string[];
 }
 
 export const QUOTES = `“[^”]{1,1500}”|"[^"\\n]{1,1500}"|«[^»]{1,1500}»|„[^“”]{1,1500}[“”]|(?<![\\p{L}\\p{N}])‘[^’\\n]{1,1500}?’(?![\\p{L}])|(?<![\\p{L}\\p{N}])'[^'\\n]{1,1500}?'(?![\\p{L}])`;
@@ -132,10 +134,15 @@ function lastNameBefore(text: string, at: number): string | null {
 export function scanCharacters(chunks: string[]): ScannedCharacter[] {
   const text = chunks.join("\n\n").replace(/([^\n])\n(?=[^\n])/g, "$1 ");
   const speaks = new Map<string, number>();
+  const samples = new Map<string, string[]>();
   for (const q of text.matchAll(quoteRe)) {
     let who = attribution(text, q.index!, q.index! + q[0].length);
     if (who === "he" || who === "she") who = lastNameBefore(text, q.index!);
-    if (who) speaks.set(who, (speaks.get(who) ?? 0) + 1);
+    if (who) {
+      speaks.set(who, (speaks.get(who) ?? 0) + 1);
+      const list = samples.get(who) ?? [];
+      if (list.length < 3 && q[0].length > 25) samples.set(who, [...list, q[0].slice(1, 160)]);
+    }
   }
   // Merge "Elena Marsh" into "Elena" (or the reverse when only the full name is used).
   const names = [...speaks.keys()].sort((a, b) => a.length - b.length);
@@ -157,7 +164,8 @@ export function scanCharacters(chunks: string[]): ScannedCharacter[] {
   const found: ScannedCharacter[] = [];
   for (const [name, lines] of [...counts].sort((a, b) => b[1] - a[1])) {
     if (lines < minLines) continue;
-    found.push({ name, gender: guessGender(name, text), age: guessAge(name, text), lines });
+    const said = [...samples].filter(([n]) => (canonical.get(n) ?? n) === name).flatMap(([, l]) => l).slice(0, 3);
+    found.push({ name, gender: guessGender(name, text), age: guessAge(name, text), lines, samples: said });
     if (found.length >= 24) break;
   }
   return found;
@@ -168,6 +176,7 @@ export function matchCharacter(name: string, cast: Character[]): Character | und
   const low = name.toLowerCase();
   return (
     cast.find((c) => c.name.toLowerCase() === low) ??
+    cast.find((c) => c.aliases?.some((a) => a.toLowerCase() === low)) ??
     cast.find((c) => low.startsWith(c.name.toLowerCase() + " ") || low.endsWith(" " + c.name.toLowerCase())) ??
     cast.find((c) => c.name.toLowerCase().startsWith(low + " ") || c.name.toLowerCase().endsWith(" " + low))
   );

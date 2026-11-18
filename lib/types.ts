@@ -49,6 +49,12 @@ export interface Character {
   accent?: string;
   /** How many lines they speak in the whole book (from the pre-scan) */
   lines?: number;
+  /** Other names for the same person ("Muad'Dib" for Paul) */
+  aliases?: string[];
+  /** main / supporting / minor (from the AI casting) */
+  importance?: "main" | "supporting" | "minor";
+  /** The voice the AI casting picked (a studio voice id) */
+  voice?: string;
 }
 
 export interface Scene {

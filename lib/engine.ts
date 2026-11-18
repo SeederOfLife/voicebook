@@ -205,6 +205,12 @@ const store = {
 export class ReaderEngine {
   bookId = "";
   title = "";
+  author = "";
+  folder = "";
+  /** The AI is casting the characters of this book right now. */
+  casting_ai = false;
+  /** Voices chosen by hand in this book. */
+  private manualVoices = new Set<string>();
   chunks: string[] = [];
   chapters: Chapter[] = [];
   segments: Segment[] = [];
@@ -439,6 +445,9 @@ export class ReaderEngine {
     this.chunks = book.chunks;
     this.chapters = book.chapters;
     this.characters = book.characters ?? [];
+    this.author = book.author ?? "";
+    this.folder = book.folder ?? "";
+    this.manualVoices = new Set(book.manualVoices ?? []);
     if (!book.scanned) this.prescan(book);
     this.meta = book.meta ?? { genre: "", language: "", narrationStyle: "" };
     this.castingByProvider = book.casting ?? {};
@@ -460,6 +469,7 @@ export class ReaderEngine {
     this.justOpened = true;
     const pos = book.position ?? { chunk: 0, offset: 0 };
     this.startAt(Math.min(pos.chunk, this.chunks.length - 1), pos.offset);
+    void this.aiCast(book);
     library.patch(book.id, { openedAt: Date.now() });
     library.countAudio(book.id).then((n) => {
       if (this.bookId !== book.id) return;
@@ -585,7 +595,124 @@ export class ReaderEngine {
     this.onChange();
   }
 
+  // ---------- Casting shared by a series (same author, or same folder) ----------
+
+  private seriesKey(): string | null {
+    if (this.author.trim()) return `a:${this.author.trim().toLowerCase()}`;
+    if (this.folder.trim()) return `f:${this.folder.trim().toLowerCase()}`;
+    return null;
+  }
+
+  private seriesAll(): Record<string, Record<string, { voice?: string; gender?: string; age?: string; aliases?: string[] }>> {
+    try {
+      return JSON.parse(store.get("vb:series") ?? "{}");
+    } catch {
+      return {};
+    }
+  }
+
+  /** Characters (and their voices) already met in other books of this author/series. */
+  seriesCast() {
+    const k = this.seriesKey();
+    return k ? this.seriesAll()[k] ?? {} : {};
+  }
+
+  private seriesMatch(ch: Character) {
+    const names = [ch.name, ...(ch.aliases ?? [])].map((n) => n.toLowerCase());
+    for (const [name, v] of Object.entries(this.seriesCast()))
+      if (names.includes(name.toLowerCase()) || v.aliases?.some((a) => names.includes(a.toLowerCase()))) return v;
+    return undefined;
+  }
+
+  /** Remember this book's voices for the next books of the same author/series. */
+  private saveSeries() {
+    const k = this.seriesKey();
+    if (!k) return;
+    const all = this.seriesAll();
+    const mine = all[k] ?? {};
+    const studio = this.castingByProvider.studio ?? (this.provider === "studio" ? this.casting : {});
+    for (const ch of this.characters) {
+      if (/^Speaker [AB]$/.test(ch.name)) continue;
+      const voice = studio[ch.name] ?? this.casting[ch.name];
+      if (!voice) continue;
+      mine[ch.name] = { voice, gender: ch.gender, age: ch.age, aliases: ch.aliases };
+    }
+    all[k] = mine;
+    store.set("vb:series", JSON.stringify(all));
+  }
+
+  /** Voices chosen before (series) or by the AI casting fill in before the automatic casting. */
+  private seedCasting() {
+    const ids = new Set(this.voicesFor().map((v) => v.id));
+    for (const ch of this.characters) {
+      if (this.casting[ch.name]) continue;
+      const v = this.seriesMatch(ch)?.voice ?? ch.voice;
+      if (v && ids.has(v)) this.casting = { ...this.casting, [ch.name]: v };
+    }
+  }
+
+  /**
+   * The AI reads what the on-device scan found and returns the real cast: nicknames merged,
+   * man/woman, age, personality, voice. Done once per book (needs an AI key on the server).
+   */
+  private async aiCast(book: BookRecord) {
+    if (book.aiCast || !this.config?.providers.anthropic) return;
+    const scanned = this.characters.filter((c) => !/^Speaker [AB]$/.test(c.name));
+    if (!scanned.length) return;
+    this.casting_ai = true;
+    this.onChange();
+    try {
+      const series = Object.entries(this.seriesCast()).map(([name, v]) => ({ name, ...v }));
+      const r = await fetch("/api/cast", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: timeoutSignal(50_000),
+        body: JSON.stringify({
+          title: book.title,
+          author: book.author,
+          sample: book.chunks.slice(0, 3).join("\n\n").slice(0, 7000),
+          series,
+          candidates: scanned.slice(0, 40).map((c) => ({ name: c.name, lines: c.lines, gender: c.gender, samples: (c as { samples?: string[] }).samples })),
+        }),
+      });
+      if (!r.ok || this.bookId !== book.id) return;
+      const { characters } = (await r.json()) as { characters: Character[] };
+      if (!characters?.length || this.bookId !== book.id) return;
+      // Lines spoken: add up every name the AI merged into one person.
+      for (const c of characters) {
+        const names = new Set([c.name, ...(c.aliases ?? [])].map((n) => n.toLowerCase()));
+        c.lines = scanned.filter((s) => names.has(s.name.toLowerCase())).reduce((a, s) => a + (s.lines ?? 0), 0);
+        if (!c.aliases?.length) delete c.aliases;
+      }
+      const rank = { main: 0, supporting: 1, minor: 2 } as const;
+      characters.sort((a, b) => rank[a.importance ?? "supporting"] - rank[b.importance ?? "supporting"] || (b.lines ?? 0) - (a.lines ?? 0));
+      // Lines already split under a nickname now belong to the person.
+      const canonical = new Map<string, string>();
+      for (const c of characters) for (const a of [c.name, ...(c.aliases ?? [])]) canonical.set(a.toLowerCase(), c.name);
+      for (const seg of this.segments) {
+        const to = canonical.get(seg.speaker.toLowerCase());
+        if (to) seg.speaker = to;
+      }
+      this.characters = [...characters, ...this.characters.filter((c) => /^Speaker [AB]$/.test(c.name))];
+      // The AI's voices replace the automatic ones (not the ones the listener chose: those are kept per name).
+      const keep = Object.fromEntries(Object.entries(this.casting).filter(([n]) => n === "Narrator" || this.manualVoices.has(n)));
+      this.casting = keep;
+      this.recast();
+      this.loadedKey = "";
+      this.saveBookState();
+      this.saveSeries();
+      await library.patch(book.id, { characters: this.characters, aiCast: true });
+      this.snap(this.index);
+    } catch {
+      // No connection or AI busy: the on-device scan's cast stays; tried again next time.
+    } finally {
+      this.casting_ai = false;
+      this.onChange();
+    }
+  }
+
   private recast() {
+    this.seedCasting();
     this.casting = castVoices(this.characters, this.voicesFor(), this.meta.genre || "other", this.casting);
     this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
     for (const ch of this.characters) if (!(ch.name in this.accents)) this.accents[ch.name] = ch.accent ?? "";
@@ -1237,6 +1364,9 @@ export class ReaderEngine {
     this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
     this.loadedKey = "";
     this.saveBookState();
+    this.saveSeries(); // the same character keeps this voice in the next books of the series
+    this.manualVoices.add(speaker);
+    if (this.bookId) void library.patch(this.bookId, { manualVoices: [...this.manualVoices] });
     if (this.playing) this.playCurrent();
     else this.onChange();
   }

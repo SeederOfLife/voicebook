@@ -15,6 +15,10 @@ export interface BookRecord {
   characters?: Character[];
   /** The whole book was scanned for its characters. */
   scanned?: boolean;
+  /** The AI cast the characters (names merged, voices chosen). */
+  aiCast?: boolean;
+  /** Characters whose voice the listener chose by hand (kept over automatic choices). */
+  manualVoices?: string[];
   author?: string;
   /** Library shelf (stories, guides, …). */
   shelf?: Shelf;

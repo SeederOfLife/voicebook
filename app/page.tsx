@@ -674,6 +674,7 @@ export default function Home() {
                     </label>}
                   </div>
                 )}
+                {e.casting_ai && <p className="tip small">✨ The AI is reading the book to cast its characters…</p>}
                 {e.oneVoice && realCast.length > 0 && (
                   <div className="cast-found small">
                     <p>
@@ -698,6 +699,7 @@ export default function Home() {
                       <span className="cast-name">
                         {e.oneVoice ? "Reading voice" : name}
                         {ch && <small className="muted"> {ch.gender !== "neutral" ? ch.gender : ""} {ch.age !== "adult" ? ch.age : ""} {ch.traits ? `· ${ch.traits}` : ""}</small>}
+                        {ch?.aliases?.length ? <small className="muted aliases"> also “{ch.aliases.slice(0, 3).join("”, “")}”</small> : null}
                       </span>
                       <div className="cast-selects">
                         <button

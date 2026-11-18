@@ -1,6 +1,7 @@
 import { getAccess, denied } from "@/lib/access";
 import { heuristicAnalyze } from "@/lib/heuristic";
 import { ANALYZE_SYSTEM, analyzeUserMessage } from "@/lib/prompts";
+import { AiError, aiProvider, askJson } from "@/lib/llm";
 import {
   AMBIENCES,
   MOODS,
@@ -66,47 +67,18 @@ function normalize(raw: any, sourceText: string, known: Character[]): Analysis {
 export async function POST(req: Request) {
   const access = await getAccess(req);
   if (!access.ok) return denied(access);
-  const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) return Response.json({ error: "ANTHROPIC_API_KEY not set" }, { status: 501 });
+  if (!aiProvider()) return Response.json({ error: "No AI key (GEMINI_API_KEY or ANTHROPIC_API_KEY) set" }, { status: 501 });
 
   const body = await req.json().catch(() => null);
   const text = String(body?.text ?? "").slice(0, 12000);
   if (!text.trim()) return Response.json({ error: "No text" }, { status: 400 });
   const known: Character[] = Array.isArray(body?.knownCharacters) ? body.knownCharacters.slice(0, 80) : [];
 
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": key,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: process.env.ANTHROPIC_MODEL || "claude-haiku-5-5",
-      max_tokens: 16000,
-      system: ANALYZE_SYSTEM,
-      messages: [{ role: "user", content: analyzeUserMessage(text, known, body?.context ?? null) }],
-    }),
-  });
-
-  if (!res.ok) {
-    const detail = await res.text();
-    console.error("Anthropic error", res.status, detail.slice(0, 500));
-    return Response.json({ error: `AI analysis failed (${res.status})` }, { status: 502 });
-  }
-
-  const data = await res.json();
-  const out: string = (data.content ?? [])
-    .filter((b: any) => b.type === "text")
-    .map((b: any) => b.text)
-    .join("");
-  const start = out.indexOf("{");
-  const end = out.lastIndexOf("}");
-  let parsed: any = null;
   try {
-    parsed = JSON.parse(out.slice(start, end + 1));
-  } catch {
-    console.error("Could not parse analysis JSON");
+    const parsed = await askJson(ANALYZE_SYSTEM, analyzeUserMessage(text, known, body?.context ?? null), 16000);
+    return Response.json(normalize(parsed, text, known));
+  } catch (e) {
+    const err = e instanceof AiError ? e : new AiError(String(e));
+    return Response.json({ error: err.message }, { status: err.status });
   }
-  return Response.json(normalize(parsed, text, known));
 }

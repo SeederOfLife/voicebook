@@ -330,3 +330,4 @@ label.voice-row { cursor: pointer; }
 .code-input { font-size: 1.8rem; text-align: center; letter-spacing: 0.15em; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px; color: inherit; width: 100%; box-sizing: border-box; }
 .import-row { flex-wrap: wrap; }
 .lib-views { grid-template-columns: repeat(3, 1fr); margin-bottom: 8px; } .shelf.folder > summary { font-weight: 600; }
+.cast-name .aliases { display: block; }
