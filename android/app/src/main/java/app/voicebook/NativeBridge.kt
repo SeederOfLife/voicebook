@@ -101,11 +101,53 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         act.runOnUiThread { act.pickFolder() }
     }
 
-    /** Look again in every folder chosen before (new books since last time). */
+    /** Look again in every folder chosen before, or the whole phone if allowed (new books since last time). */
     @JavascriptInterface
     fun rescan() {
+        if (act.hasAllFilesAccess()) { scanPhoneNow(true); return }
         val trees = act.contentResolver.persistedUriPermissions.filter { it.isReadPermission }.map { it.uri }
         if (trees.isNotEmpty()) scan(trees, true)
+    }
+
+    /** Whole phone: asks for "all files" access first (one switch in Android settings). */
+    @JavascriptInterface
+    fun scanPhone() {
+        act.runOnUiThread {
+            if (act.hasAllFilesAccess()) scanPhoneNow(false) else act.askAllFilesAccess()
+        }
+    }
+
+    @JavascriptInterface
+    fun hasAllFiles(): Boolean = act.hasAllFilesAccess()
+
+    fun scanPhoneNow(auto: Boolean) {
+        scanQueue.execute {
+            val root = android.os.Environment.getExternalStorageDirectory()
+            val files = org.json.JSONArray()
+            try {
+                walkFiles(root, root, 0, files)
+            } catch (e: Throwable) {
+                Log.w(VoiceEngine.TAG, "phone scan failed", e)
+            }
+            emit("scan", JSONObject().put("auto", auto).put("folders", org.json.JSONArray().put("this phone")).put("files", files))
+        }
+    }
+
+    private fun walkFiles(root: File, dir: File, depth: Int, out: org.json.JSONArray) {
+        if (out.length() >= 5000) return
+        val list = dir.listFiles() ?: return
+        for (f in list.sortedBy { it.name.lowercase() }) {
+            if (f.name.startsWith(".")) continue
+            if (f.isDirectory) {
+                if (depth < 10 && !(depth == 0 && f.name == "Android")) walkFiles(root, f, depth + 1, out)
+            } else if (BOOK.containsMatchIn(f.name) && f.length() > 0) {
+                val key = "p" + Integer.toHexString(f.absolutePath.hashCode())
+                found[key] = Uri.fromFile(f)
+                val folder = f.parentFile?.relativeTo(root)?.path?.ifBlank { "Phone" } ?: "Phone"
+                out.put(JSONObject().put("id", key).put("name", f.name).put("size", f.length())
+                    .put("modified", f.lastModified()).put("folder", folder))
+            }
+        }
     }
 
     @JavascriptInterface

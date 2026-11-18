@@ -9,11 +9,12 @@ export interface ExtractedBook {
 
 /** "Jane Austen - Pride and Prejudice" → author + title (when the file has no details inside). */
 function fromFileName(name: string): { title: string; author?: string } {
-  const raw = name.replace(/\.[^.]+$/, "").trim();
+  // "01 - Dune" → "Dune" (the number still orders the folder, from the file name).
+  const raw = name.replace(/\.[^.]+$/, "").trim().replace(/^(?:book\s*|vol\.?\s*|#)?\d{1,3}\s*[-–—._)]\s*/i, "") || name;
   const m = /^(.{3,40}?)\s+[-–—]\s+(.{2,})$/.exec(raw);
   if (m && /^[A-Z][\p{L}.'’ ]+$/u.test(m[1]) && m[1].split(" ").length <= 4)
     return { author: m[1].trim(), title: baseName(m[2]) };
-  return { title: baseName(name) };
+  return { title: baseName(raw + ".x") };
 }
 
 /** Details written inside a PDF are often junk ("Microsoft Word - doc1.docx"): keep only plausible ones. */

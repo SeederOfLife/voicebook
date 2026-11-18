@@ -20,6 +20,10 @@ export interface BookRecord {
   shelf?: Shelf;
   /** Where it came from, e.g. "Download" (a folder on the phone) or a file name. */
   source?: string;
+  /** Folder it was found in on the phone, e.g. "Download/Books/Dune". */
+  folder?: string;
+  /** Original file name (keeps the folder's order, e.g. "01 - Dune.epub"). */
+  fileName?: string;
   meta?: { genre: string; language: string; narrationStyle: string };
   casting?: Partial<Record<Provider, Record<string, string>>>;
   accents?: Record<string, string>;
@@ -32,7 +36,7 @@ export interface VoiceTweak {
   speed: number;
 }
 
-export type BookSummary = Pick<BookRecord, "id" | "title" | "openedAt" | "addedAt" | "position" | "chapters" | "author" | "source"> & {
+export type BookSummary = Pick<BookRecord, "id" | "title" | "openedAt" | "addedAt" | "position" | "chapters" | "author" | "source" | "folder" | "fileName"> & {
   total: number;
   shelf: Shelf;
   /** Opened at least once (books imported in bulk are "new" until then) */
@@ -170,7 +174,7 @@ export const library = {
       const all = (await tx("readonly", (s) => s.getAll())) as BookRecord[];
       return all
         .sort((a, b) => b.openedAt - a.openedAt)
-        .map(({ id, title, openedAt, addedAt, position, chapters, chunks, author, source, shelf }) => ({
+        .map(({ id, title, openedAt, addedAt, position, chapters, chunks, author, source, shelf, folder, fileName }) => ({
           id,
           title,
           openedAt,
@@ -179,6 +183,8 @@ export const library = {
           chapters,
           author,
           source,
+          folder: folder ?? (source && source !== "shared" ? source : undefined),
+          fileName,
           total: chunks.length,
           shelf: shelf ?? shelfFor(chunks),
           started: openedAt > addedAt + 1000 || position.chunk > 0 || position.offset > 0,

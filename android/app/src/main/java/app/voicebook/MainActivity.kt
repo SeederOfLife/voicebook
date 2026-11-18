@@ -114,6 +114,40 @@ class MainActivity : Activity() {
         if (savedInstanceState == null && intent?.getBooleanExtra("selftest", false) == true) bridge.selfTest()
     }
 
+    private var phoneScanAsked = false
+
+    fun hasAllFilesAccess(): Boolean =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) android.os.Environment.isExternalStorageManager()
+        else checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+
+    /** Opens Android's "Allow access to all files" switch for Voicebook; the scan starts when the listener comes back. */
+    fun askAllFilesAccess() {
+        phoneScanAsked = true
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+            } catch (_: Throwable) {
+                startActivity(Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
+        } else requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 2)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (phoneScanAsked && hasAllFilesAccess()) {
+            phoneScanAsked = false
+            bridge.scanPhoneNow(false)
+        }
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 2 && hasAllFilesAccess()) {
+            phoneScanAsked = false
+            bridge.scanPhoneNow(false)
+        }
+    }
+
     /** System folder chooser (the app may then read that folder, and only that folder). */
     fun pickFolder() {
         try {

@@ -252,7 +252,7 @@ export default function Home() {
   const [sharingOpen, setSharingOpen] = useState(false);
 
   /** Add books to the library without opening them (several at once). */
-  const importFiles = async (files: File[], source?: string) => {
+  const importFiles = async (files: File[], source?: string, folders?: (string | undefined)[]) => {
     setLoadError(null);
     let added = 0;
     let known = 0;
@@ -265,12 +265,16 @@ export default function Home() {
         const { chunks, chapters } = buildBook(book.sections);
         if (!chunks.length) throw new Error("no text");
         const id = bookId(book.title, chunks.join("\n"));
-        if (await library.get(id)) known++;
-        else {
+        const existing = await library.get(id);
+        if (existing) {
+          known++;
+          // Added before: just remember where it lives now (folder view).
+          if (folders?.[i] && existing.folder !== folders[i]) await library.patch(id, { folder: folders[i], fileName: f.name });
+        } else {
           const now = Date.now();
           await library.put({
             id, title: book.title, author: book.author, chunks, chapters, addedAt: now, openedAt: now,
-            position: { chunk: 0, offset: 0 }, shelf: shelfFor(chunks), source,
+            position: { chunk: 0, offset: 0 }, shelf: shelfFor(chunks), source, folder: folders?.[i], fileName: f.name,
           });
           added++;
         }
@@ -477,7 +481,12 @@ export default function Home() {
               {importNote && <p className="muted small notice">{importNote}</p>}
               <div className="row gap import-row">
                 {e?.native.available && e.native.canScan && (
-                  <button className="btn" disabled={!!busy} onClick={() => e.native.scanFolder()}>📱 Find books on this phone</button>
+                  <>
+                    <button className="btn" disabled={!!busy} onClick={() => e.native.scanPhone()}>📱 Find books on this phone</button>
+                    {e.native.canScanPhone && (
+                      <button className="btn" disabled={!!busy} onClick={() => e.native.scanFolder()}>📁 Choose a folder</button>
+                    )}
+                  </>
                 )}
                 <button className="btn" onClick={() => setSharingOpen(true)}>⇄ Share with another device</button>
               </div>
@@ -854,13 +863,15 @@ export default function Home() {
           onImport={async (files) => {
             setScan(null);
             const read: File[] = [];
+            const where: string[] = [];
             for (const f of files) {
               setBusy(`Opening ${f.name}…`);
               try {
                 read.push(await e.native.readFound(f));
+                where.push(f.folder);
               } catch {}
             }
-            await importFiles(read, files[0]?.folder.split("/")[0]);
+            await importFiles(read, "phone", where);
           }}
         />
       )}
@@ -1175,7 +1186,8 @@ function rememberImported(f: File) {
 function ScanDialog({ scan, onClose, onImport }: { scan: ScanResult; onClose: () => void; onImport: (f: FoundFile[]) => void }) {
   const done = importedSet();
   const fresh = (f: FoundFile) => !done.has(importedKey(f.name, f.size));
-  const [picked, setPicked] = useState<Set<string>>(() => new Set(scan.files.filter(fresh).map((f) => f.id)));
+  // A scan you started yourself ticks everything (books already added just get their folder updated).
+  const [picked, setPicked] = useState<Set<string>>(() => new Set(scan.files.filter((f) => !scan.auto || fresh(f)).map((f) => f.id)));
   const byFolder = new Map<string, FoundFile[]>();
   for (const f of scan.files) byFolder.set(f.folder, [...(byFolder.get(f.folder) ?? []), f]);
   const toggle = (id: string) => setPicked((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
@@ -1188,7 +1200,7 @@ function ScanDialog({ scan, onClose, onImport }: { scan: ScanResult; onClose: ()
           <button className="icon small-icon" onClick={onClose} aria-label="Close">✕</button>
         </div>
         <p className="muted small">
-          In {scan.folders.join(", ")}. PDF, EPUB and text files{scan.files.some((f) => !fresh(f)) ? "; the ones already in your library are not ticked" : ""}.
+          In {scan.folders.join(", ")}. PDF, EPUB and text files.
         </p>
         <div className="row gap">
           <button className="link-btn" onClick={() => setPicked(new Set(scan.files.map((f) => f.id)))}>Select all</button>
@@ -1203,7 +1215,7 @@ function ScanDialog({ scan, onClose, onImport }: { scan: ScanResult; onClose: ()
                   <span className="voice-name">
                     <input type="checkbox" checked={picked.has(f.id)} onChange={() => toggle(f.id)} /> {f.name.replace(/\.[^.]+$/, "")}
                   </span>
-                  <span className="muted small">{f.name.split(".").pop()?.toUpperCase()} · {mb(f.size)}{fresh(f) ? "" : " · already added"}</span>
+                  <span className="muted small">{f.name.split(".").pop()?.toUpperCase()} · {mb(f.size)}{fresh(f) ? "" : " · already added (folder updated)"}</span>
                 </label>
               ))}
             </div>

@@ -12,6 +12,8 @@ interface Bridge {
   setPlaying(playing: boolean, title: string, subtitle: string): void;
   openExternal(url: string): void;
   scanFolder?(): void;
+  scanPhone?(): void;
+  hasAllFiles?(): boolean;
   rescan?(): void;
   forgetFolders?(): void;
 }
@@ -154,6 +156,17 @@ export class NativeVoice {
 
   scanFolder() {
     bridge()?.scanFolder?.();
+  }
+
+  /** The whole phone (asks once for "all files" access). Falls back to choosing a folder on older apps. */
+  scanPhone() {
+    const b = bridge();
+    if (b?.scanPhone) b.scanPhone();
+    else b?.scanFolder?.();
+  }
+
+  get canScanPhone() {
+    return typeof bridge()?.scanPhone === "function";
   }
 
   rescan() {
