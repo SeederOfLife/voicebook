@@ -450,7 +450,7 @@ export default function Home() {
                 <button className="btn" onClick={() => setShowPaste((s) => !s)}>Paste text</button>
                 <button className="btn" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>Try a sample story</button>
               </div>
-              {!installed && !inAndroidApp() && <InstallCard evt={installEvt} />}
+              {!inAndroidApp() && (!installed || isAndroid()) && <InstallCard evt={installEvt} installed={installed} />}
               {inAndroidApp() && !e.native.ready && (
                 <div className="install-card small">
                   <p>
@@ -1010,7 +1010,11 @@ function VoiceSheet({ e, speaker, onClose }: { e: ReaderEngine; speaker: string;
 }
 
 /** Invite to install Voicebook as an app on the phone (offline, keeps reading with the screen off). */
-function InstallCard({ evt }: { evt: { prompt: () => Promise<unknown> } | null }) {
+function isAndroid() {
+  return typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
+}
+
+function InstallCard({ evt, installed }: { evt: { prompt: () => Promise<unknown> } | null; installed: boolean }) {
   const ios = typeof navigator !== "undefined" && /iPhone|iPad|iPod/.test(navigator.userAgent);
   return (
     <div className="install-card small">
@@ -1026,7 +1030,7 @@ function InstallCard({ evt }: { evt: { prompt: () => Promise<unknown> } | null }
           <span className="muted">Runs the voice natively on your phone and keeps reading with the screen off. After the download, open the file and allow the install.</span>
         </p>
       )}
-      {evt ? (
+      {installed ? null : evt ? (
         <button className="btn" onClick={() => void evt.prompt()}>Or install the web app</button>
       ) : (
         <p className="muted">
