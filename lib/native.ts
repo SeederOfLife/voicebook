@@ -42,7 +42,8 @@ export const NATIVE_TIERS: Record<NativeTier, { name: string; blurb: string }> =
   best: { name: "Best", blurb: "The full studio voice, exactly like the server. Needs a recent phone (6 GB+ memory)." },
 };
 
-export const ANDROID_APK_URL = "https://github.com/SeederOfLife/voicebook/releases/download/android/voicebook.apk";
+/** Served by the web app itself (the GitHub repository is private). */
+export const ANDROID_APK_URL = "/download/voicebook.apk";
 
 const bridge = (): Bridge | undefined =>
   typeof window !== "undefined" ? (window as unknown as { VBNative?: Bridge }).VBNative : undefined;

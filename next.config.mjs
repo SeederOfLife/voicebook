@@ -45,6 +45,15 @@ const nextConfig = {
           { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
         ],
       },
+      {
+        // The Android app: download as a file the phone offers to install.
+        source: "/download/:file(.*\\.apk)",
+        headers: [
+          { key: "Content-Type", value: "application/vnd.android.package-archive" },
+          { key: "Content-Disposition", value: "attachment" },
+          { key: "Cache-Control", value: "public, max-age=300" },
+        ],
+      },
     ];
   },
 };

@@ -32,7 +32,7 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin) return; // voices from Hugging Face: handled by the app
-  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/__native/")) return; // always live / served by the Android app
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/__native/") || url.pathname.startsWith("/download/")) return; // always live / served by the Android app
 
   // Pages: the newest version when online, the kept one when offline.
   if (req.mode === "navigate") {
