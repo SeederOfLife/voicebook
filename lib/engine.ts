@@ -7,6 +7,7 @@ import { BuiltinVoices, builtinSupported, type DeviceKind, type Tier } from "./b
 import { heuristicAnalyze } from "./heuristic";
 import { scanCharacters } from "./cast-scan";
 import { NativeVoice } from "./native";
+import { api } from "./paths";
 import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
 import type { Analysis, AppConfig, Chapter, Character, Emotion, Mood, Provider, RawSegment, Scene, Segment, VoiceOption } from "./types";
@@ -663,7 +664,7 @@ export class ReaderEngine {
     this.onChange();
     try {
       const series = Object.entries(this.seriesCast()).map(([name, v]) => ({ name, ...v }));
-      const r = await fetch("/api/cast", {
+      const r = await fetch(api("/api/cast"), {
         method: "POST",
         headers: { "content-type": "application/json" },
         signal: timeoutSignal(50_000),
@@ -758,7 +759,7 @@ export class ReaderEngine {
         try {
           // Never hold the reading up for long: after a while the quick on-device analysis is used.
           const waiting = this.segments.length === 0 || (this.playing && this.index >= this.segments.length);
-          const r = await fetch("/api/analyze", {
+          const r = await fetch(api("/api/analyze"), {
             signal: timeoutSignal(waiting ? 12_000 : 40_000),
             method: "POST",
             headers: this.headers(),
@@ -993,7 +994,7 @@ export class ReaderEngine {
     if (provider === "studio") return this.studioSlot(() => this.studioRequest(p), lookAhead, epoch);
 
     const seg = p.seg;
-    const r = await fetch("/api/tts", {
+    const r = await fetch(api("/api/tts"), {
       method: "POST",
       headers: this.headers(),
       body: JSON.stringify({
@@ -1047,7 +1048,7 @@ export class ReaderEngine {
       if (this.studioUsedUp) throw new VoiceError("limit", "this month's free studio-voice allowance is used up");
       let r: Response;
       try {
-        r = await fetch("/api/voice", {
+        r = await fetch(api("/api/voice"), {
           method: "POST",
           headers: this.headers(),
           body: JSON.stringify({ text: p.text, voice: p.voice || "af_heart", tailMs: p.tailMs }),
@@ -1131,7 +1132,7 @@ export class ReaderEngine {
   private sfxFor(desc: string): Promise<string> {
     let p = this.sfxCache.get(desc);
     if (!p) {
-      p = fetch("/api/sfx", { method: "POST", headers: this.headers(), body: JSON.stringify({ text: desc }) }).then(async (r) => {
+      p = fetch(api("/api/sfx"), { method: "POST", headers: this.headers(), body: JSON.stringify({ text: desc }) }).then(async (r) => {
         if (!r.ok) throw new Error("sfx");
         return URL.createObjectURL(await r.blob());
       });

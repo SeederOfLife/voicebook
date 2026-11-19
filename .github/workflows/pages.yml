@@ -1,0 +1,47 @@
+name: Website (GitHub Pages)
+# Publishes the app as a static site at https://seederoflife.github.io/voicebook/
+# The voice and AI come from a separate server (Hugging Face Space, or Vercel while it works).
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ["android/**", "ci/**", "huggingface/**", ".github/workflows/android.yml", ".github/workflows/hf-space.yml"]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "22", cache: npm }
+      - run: npm ci --no-audit --no-fund
+        env: { ONNXRUNTIME_NODE_INSTALL_CUDA: skip }
+      - name: Build the static site
+        env:
+          STATIC_EXPORT: "1"
+          NEXT_PUBLIC_BASE_PATH: /voicebook
+          # Voice/AI servers, tried in order (change in Settings → Variables → VOICE_SERVERS).
+          NEXT_PUBLIC_API_BASES: ${{ vars.VOICE_SERVERS || 'https://seederoflife-voicebook.hf.space,https://voicebook-lake.vercel.app' }}
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          rm -rf app/api
+          npx next build
+          touch out/.nojekyll
+          du -sh out
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: out }
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

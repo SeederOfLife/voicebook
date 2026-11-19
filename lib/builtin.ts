@@ -7,6 +7,7 @@
 //              on the graphics chip (WebGPU) when there is one
 import type { VoiceOption } from "./types";
 import { STUDIO_VOICES } from "./voices";
+import { asset } from "./paths";
 
 export type Tier = "light" | "balanced" | "best";
 export const TIER_ORDER: Tier[] = ["light", "balanced", "best"];
@@ -283,7 +284,7 @@ export class BuiltinVoices {
 
   private start() {
     if (this.worker) return this.worker;
-    const url = this.tier === "light" ? "/voice/piper.worker.js" : `/voice/kokoro.worker.js?tier=${this.tier}`;
+    const url = asset(this.tier === "light" ? "/voice/piper.worker.js" : `/voice/kokoro.worker.js?tier=${this.tier}`);
     const w = new Worker(url, { type: "module" });
     const tier = this.tier;
     this.progress = this.stored.has(tier) ? 1 : 0;

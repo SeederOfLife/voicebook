@@ -12,6 +12,7 @@ import { hash } from "@/lib/voices";
 import { DEVICE_KINDS, TIERS, TIER_ORDER, type DeviceKind, type Tier } from "@/lib/builtin";
 import { ANDROID_APK_URL, inAndroidApp, NATIVE_TIERS, type FoundFile, type NativeTier, type ScanResult } from "@/lib/native";
 import { LibraryView } from "./library-view";
+import { api, asset, findServer } from "@/lib/paths";
 import { ShareDialog } from "./share-dialog";
 import { shelfFor } from "@/lib/shelf";
 
@@ -117,16 +118,13 @@ export default function Home() {
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const refreshBooks = useCallback(() => library.list().then(setBooks), []);
+  const [serverWait, setServerWait] = useState<string | null>(null);
 
   const loadConfig = useCallback(async (e: ReaderEngine) => {
-    let c: AppConfig;
-    try {
-      const r = await fetch("/api/config", { headers: e.headers() });
-      if (!r.ok) throw new Error(String(r.status));
-      c = await r.json();
-    } catch {
-      c = OFFLINE_CONFIG; // no connection (or the server is down): open anyway
-    }
+    // The voice server may be this site's own, or a separate one (Hugging Face / Vercel).
+    const found = await findServer<AppConfig>(e.headers(), (msg) => setServerWait(msg));
+    setServerWait(null);
+    const c: AppConfig = found?.config ?? OFFLINE_CONFIG; // no connection (or no server): open anyway
     setCfg(c);
     e.setConfig(c);
     return c;
@@ -137,7 +135,7 @@ export default function Home() {
   const [installed, setInstalled] = useState(false);
   useEffect(() => {
     setInstalled(window.matchMedia("(display-mode: standalone)").matches || (navigator as { standalone?: boolean }).standalone === true);
-    if ("serviceWorker" in navigator && location.hostname !== "localhost") navigator.serviceWorker.register("/sw.js").catch(() => {});
+    if ("serviceWorker" in navigator && location.hostname !== "localhost") navigator.serviceWorker.register(asset("/sw.js"), { scope: asset("/") || "/" }).catch(() => {});
     const onPrompt = (ev: Event) => {
       ev.preventDefault();
       setInstallEvt(ev as unknown as { prompt: () => Promise<unknown> });
@@ -324,7 +322,7 @@ export default function Home() {
   const startCheckout = async () => {
     if (!e) return;
     if (!cfg?.user) return setModal("signin");
-    const r = await fetch("/api/checkout", { method: "POST", headers: e.headers() });
+    const r = await fetch(api("/api/checkout"), { method: "POST", headers: e.headers() });
     const d = await r.json();
     if (d.url) location.href = d.url;
     else setAuthMsg(d.error ?? "Could not start checkout");
@@ -332,7 +330,7 @@ export default function Home() {
 
   const openPortal = async () => {
     if (!e) return;
-    const r = await fetch("/api/portal", { method: "POST", headers: e.headers() });
+    const r = await fetch(api("/api/portal"), { method: "POST", headers: e.headers() });
     const d = await r.json();
     if (d.url) location.href = d.url;
     else setAuthMsg(d.error ?? "Could not open billing");
@@ -479,6 +477,7 @@ export default function Home() {
                 />
               )}
 
+              {serverWait && <p className="muted small notice">⏳ {serverWait}</p>}
               {importNote && <p className="muted small notice">{importNote}</p>}
               <div className="row gap import-row">
                 {e?.native.available && e.native.canScan && (

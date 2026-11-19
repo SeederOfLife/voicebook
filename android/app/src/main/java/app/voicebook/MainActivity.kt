@@ -24,8 +24,12 @@ import android.webkit.WebViewClient
 /** Voicebook for Android: the web app in a full-screen WebView, plus native powers (see NativeBridge). */
 class MainActivity : Activity() {
     companion object {
-        const val HOST = "voicebook-lake.vercel.app"
-        const val START_URL = "https://$HOST/"
+        // The app lives on GitHub Pages; the old Vercel address still opens inside the app.
+        const val HOST = "seederoflife.github.io"
+        const val START_URL = "https://$HOST/voicebook/"
+        val HOSTS = setOf(HOST, "voicebook-lake.vercel.app")
+        /** Where the app can be found, in order: if one address is down, the next is tried. */
+        val START_URLS = listOf(START_URL, "https://voicebook-lake.vercel.app/")
         private const val PICK_FILE = 42
         private const val PICK_FOLDER = 43
     }
@@ -33,6 +37,14 @@ class MainActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var bridge: NativeBridge
     private var fileCallback: ValueCallback<Array<Uri>>? = null
+    private var startIndex = 0
+
+    /** The current address failed: try the next one, or show the offline page. */
+    private fun nextAddress(view: WebView) {
+        startIndex++
+        if (startIndex < START_URLS.size) view.loadUrl(START_URLS[startIndex])
+        else view.loadUrl("file:///android_asset/offline.html")
+    }
 
     private val toggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -67,14 +79,19 @@ class MainActivity : Activity() {
 
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 val u = request.url
-                if (u.host == HOST) return false
+                if (u.host in HOSTS) return false
                 return try {
                     startActivity(Intent(Intent.ACTION_VIEW, u)); true
                 } catch (_: Throwable) { true }
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) view.loadUrl("file:///android_asset/offline.html")
+                if (request.isForMainFrame) nextAddress(view)
+            }
+
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                // e.g. 404 (site not published there yet) or 402/403 (host blocked us)
+                if (request.isForMainFrame && response.statusCode >= 400) nextAddress(view)
             }
         }
         ServiceWorkerController.getInstance().setServiceWorkerClient(object : ServiceWorkerClient() {

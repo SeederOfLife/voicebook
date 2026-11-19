@@ -19,10 +19,12 @@ const MAX_CHARS = 1500;
 
 const enabled = () => process.env.STUDIO_VOICE !== "off";
 
-/** Only this site's own pages may ask for speech (it costs server time). */
+/** Only this site's own pages (and the GitHub Pages site) may ask for speech (it costs server time). */
 function fromThisSite(req: Request): boolean {
   const site = req.headers.get("sec-fetch-site");
-  return !site || site === "same-origin" || site === "none";
+  if (!site || site === "same-origin" || site === "none") return true;
+  const allowed = (process.env.CORS_ORIGIN || "https://seederoflife.github.io").split(",").map((s) => s.trim());
+  return allowed.includes(req.headers.get("origin") ?? "");
 }
 
 function statusBody() {

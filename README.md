@@ -180,3 +180,21 @@ also splits each part into narration and dialogue with emotions (`/api/analyze`)
 Voices are remembered per series (same author, or the same folder when the
 author is unknown): a character keeps the same voice in every book, and a voice
 chosen by hand is never replaced by the automatic casting.
+
+## Hosting: GitHub Pages + Hugging Face (Vercel optional)
+
+The app can run without Vercel:
+
+- **Website**: `.github/workflows/pages.yml` builds a static copy (`STATIC_EXPORT=1`,
+  under `/voicebook/`) and publishes it to **https://seederoflife.github.io/voicebook/**.
+  The offline worker adds the cross-origin isolation headers Pages can't send.
+- **Voice + AI server**: a Hugging Face Space (Docker, free CPU) built from
+  `huggingface/Dockerfile`, which clones this repository and bakes in the full voice
+  model. `.github/workflows/hf-space.yml` keeps the Space on the newest code
+  (needs the repository secret `HF_TOKEN`).
+- The site tries the servers in `NEXT_PUBLIC_API_BASES` in order (default: the Space,
+  then Vercel) and remembers the first that answers; a sleeping Space is waited for.
+  Change the list with the repository variable `VOICE_SERVERS`.
+- Servers accept calls from `CORS_ORIGIN` (default `https://seederoflife.github.io`).
+- The Android app opens the Pages address and falls back to Vercel (or the reverse)
+  if one is down.

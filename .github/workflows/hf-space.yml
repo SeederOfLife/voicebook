@@ -1,0 +1,31 @@
+name: Voice server (Hugging Face Space)
+# Keeps the Hugging Face Space (the studio voice + AI server) on the newest code.
+# Needs the repository secret HF_TOKEN (a Hugging Face "write" token); does nothing without it.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore: ["android/**", "ci/**", "public/download/**", ".github/workflows/android.yml"]
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      SPACE: ${{ vars.HF_SPACE || 'SeederOfLife/voicebook' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.HF_TOKEN != ''
+      - name: Update the Space
+        if: env.HF_TOKEN != ''
+        run: |
+          git clone "https://user:${HF_TOKEN}@huggingface.co/spaces/${SPACE}" space
+          cp huggingface/README.md huggingface/Dockerfile space/
+          sed -i "s/^ARG REVISION=.*/ARG REVISION=${GITHUB_SHA}/" space/Dockerfile
+          cd space
+          git config user.name "Voicebook bot"; git config user.email "bot@voicebook.invalid"
+          git add -A
+          git commit -m "Voicebook ${GITHUB_SHA::7}" || { echo "nothing to update"; exit 0; }
+          git push
+      - name: No token yet
+        if: env.HF_TOKEN == ''
+        run: echo "Add the HF_TOKEN secret to update the Hugging Face Space automatically."

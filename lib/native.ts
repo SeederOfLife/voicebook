@@ -2,6 +2,8 @@
 // own processor through the app (window.VBNative, see android/…/NativeBridge.kt).
 // Only present inside the Voicebook Android app.
 
+import { asset } from "./paths";
+
 export type NativeTier = "fast" | "best";
 
 interface Bridge {
@@ -64,7 +66,7 @@ export const NATIVE_TIERS: Record<NativeTier, { name: string; blurb: string }> =
 };
 
 /** Served by the web app itself (the GitHub repository is private). */
-export const ANDROID_APK_URL = "/download/voicebook.apk";
+export const ANDROID_APK_URL = asset("/download/voicebook.apk");
 
 const bridge = (): Bridge | undefined =>
   typeof window !== "undefined" ? (window as unknown as { VBNative?: Bridge }).VBNative : undefined;
@@ -159,7 +161,7 @@ export class NativeVoice {
   async checkUpdate() {
     if (!this.info) return;
     try {
-      const r = await fetch(`/download/version.json?t=${Date.now()}`, { cache: "no-store" });
+      const r = await fetch(asset(`/download/version.json?t=${Date.now()}`), { cache: "no-store" });
       const v = (await r.json()) as { versionName: string; versionCode: number };
       this.update = v.versionCode > (this.info.versionCode ?? 0) ? v : null;
       this.onChange();

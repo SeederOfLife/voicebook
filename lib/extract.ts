@@ -1,5 +1,6 @@
 // Runs in the browser: turns an uploaded file into chapters of plain text.
 import { detectSections, type Section } from "./chunk";
+import { asset } from "./paths";
 
 export interface ExtractedBook {
   title: string;
@@ -41,7 +42,7 @@ let pdfMeta: { title?: string; author?: string } = {};
 
 async function pdfSections(file: File, onProgress?: (p: number) => void): Promise<Section[]> {
   const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
+  pdfjs.GlobalWorkerOptions.workerSrc = asset("/pdf.worker.min.mjs");
   const doc = await pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
   try {
     const info = ((await doc.getMetadata()).info ?? {}) as { Title?: unknown; Author?: unknown };
