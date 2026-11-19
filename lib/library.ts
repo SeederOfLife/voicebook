@@ -154,6 +154,30 @@ export const library = {
     } catch {}
   },
   /** How many passages of a book have saved audio. */
+  /** Saved audio per book: how many passages and how many bytes. */
+  async audioStats(): Promise<Map<string, { count: number; bytes: number }>> {
+    const out = new Map<string, { count: number; bytes: number }>();
+    try {
+      const d = await db();
+      await new Promise<void>((resolve, reject) => {
+        const req = d.transaction(AUDIO, "readonly").objectStore(AUDIO).openCursor();
+        req.onsuccess = () => {
+          const c = req.result;
+          if (!c) return resolve();
+          const id = String(c.key).split("\u0000")[0];
+          const v = c.value as { buf?: ArrayBuffer };
+          const s = out.get(id) ?? { count: 0, bytes: 0 };
+          s.count++;
+          s.bytes += v?.buf?.byteLength ?? 0;
+          out.set(id, s);
+          c.continue();
+        };
+        req.onerror = () => reject(req.error);
+      });
+    } catch {}
+    return out;
+  },
+
   async countAudio(id: string): Promise<number> {
     try {
       return await tx("readonly", (s) => s.count(ofBook(id)), AUDIO);

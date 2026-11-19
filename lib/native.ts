@@ -15,10 +15,27 @@ interface Bridge {
   openExternal(url: string): void;
   scanFolder?(): void;
   installUpdate?(url: string): void;
+  storageInfo?(): string;
+  clearCache?(): void;
+  freeMemory?(): void;
+  allowBackground?(): void;
+  openStorageSettings?(): void;
   scanPhone?(): void;
   hasAllFiles?(): boolean;
   rescan?(): void;
   forgetFolders?(): void;
+}
+
+export interface NativeStorage {
+  voicesBytes: number;
+  cacheBytes: number;
+  appDataBytes: number;
+  freeBytes: number;
+  totalBytes: number;
+  phoneMemoryFreeMb: number;
+  phoneMemoryLow: boolean;
+  appMemoryMb: number;
+  backgroundAllowed: boolean;
 }
 
 /** A book file found in a folder on the phone. */
@@ -178,6 +195,28 @@ export class NativeVoice {
       b.installUpdate(url);
     } else b?.openExternal(url); // older app: the browser downloads it
     this.onChange();
+  }
+
+  // ---------- Storage & speed (app 1.16+) ----------
+  storageInfo(): NativeStorage | null {
+    try {
+      const s = bridge()?.storageInfo?.();
+      return s ? JSON.parse(s) : null;
+    } catch {
+      return null;
+    }
+  }
+  clearCache() {
+    bridge()?.clearCache?.();
+  }
+  freeMemory() {
+    bridge()?.freeMemory?.();
+  }
+  allowBackground() {
+    bridge()?.allowBackground?.();
+  }
+  openStorageSettings() {
+    bridge()?.openStorageSettings?.();
   }
 
   /** Scanning folders needs the newer app (version with folder access). */

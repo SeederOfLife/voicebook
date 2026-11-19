@@ -159,6 +159,16 @@ class VoiceEngine(private val ctx: Context) {
         }
     }
 
+    /** Let go of the voice model in memory (it opens again when needed). */
+    @Synchronized
+    fun release() {
+        tts?.release()
+        tts = null
+        ttsTier = ""
+    }
+
+    fun sizeOnDisk(): Long = root.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+
     @Synchronized
     fun remove(id: String) {
         val t = TIERS[id] ?: return

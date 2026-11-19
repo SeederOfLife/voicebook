@@ -1338,6 +1338,27 @@ export class ReaderEngine {
     this.onChange();
   }
 
+  /**
+   * Free memory: drop audio kept in memory (except what's playing and the next passage),
+   * and close voice engines that aren't in use right now.
+   */
+  freeMemory() {
+    const keep = new Set<string>();
+    const cur = this.passageAt(this.index);
+    if (cur) {
+      keep.add(cur.key);
+      const next = this.passageAt(cur.end + 1);
+      if (next) keep.add(next.key);
+    }
+    for (const k of [...this.cache.keys()]) if (!keep.has(k)) {
+      this.cache.delete(k);
+      this.ready.delete(k);
+    }
+    if (this.provider !== "builtin") this.builtin.release();
+    if (this.provider !== "native" || !this.playing) this.native.freeMemory();
+    this.onChange();
+  }
+
   /** Choose the size ("power") of the on-device voice. */
   setBuiltinTier(t: Tier) {
     if (t === this.builtin.tier) return;

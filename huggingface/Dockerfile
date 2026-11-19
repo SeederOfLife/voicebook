@@ -27,4 +27,4 @@ ENV NODE_ENV=production PORT=7860 HOSTNAME=0.0.0.0 \
     KOKORO_MODEL=fp32 KOKORO_MODEL_PATH=/home/user/app/models/kokoro-v1.0.onnx \
     STUDIO_MONTHLY_HOURS=0
 EXPOSE 7860
-CMD ["npx", "next", "start", "-p", "7860", "-H", "0.0.0.0"]
+CMD ["sh", "-c", "exec npx next start -H 0.0.0.0 -p ${PORT:-7860}"]

@@ -130,6 +130,76 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         }
     }
 
+    // ---------- Storage & speed ----------
+
+    /** What Voicebook takes on this phone, and the phone's free space. */
+    @JavascriptInterface
+    fun storageInfo(): String {
+        val dataDir = act.filesDir.parentFile ?: act.filesDir
+        val cache = act.cacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        val stat = android.os.StatFs(act.filesDir.absolutePath)
+        val pm = act.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+        val rt = Runtime.getRuntime()
+        val am = act.getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val mem = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
+        return JSONObject().apply {
+            put("voicesBytes", engine.sizeOnDisk())
+            put("cacheBytes", cache)
+            put("appDataBytes", dataDir.walkTopDown().filter { it.isFile }.sumOf { it.length() })
+            put("freeBytes", stat.availableBytes)
+            put("totalBytes", stat.totalBytes)
+            put("phoneMemoryFreeMb", mem.availMem / (1024 * 1024))
+            put("phoneMemoryLow", mem.lowMemory)
+            put("appMemoryMb", (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024))
+            put("backgroundAllowed", pm.isIgnoringBatteryOptimizations(act.packageName))
+        }.toString()
+    }
+
+    /** Temporary files only (speech being played, downloaded updates). Books and voices stay. */
+    @JavascriptInterface
+    fun clearCache() {
+        downloads.execute {
+            act.cacheDir.listFiles()?.forEach { it.deleteRecursively() }
+            File(act.cacheDir, "speech").mkdirs()
+            act.runOnUiThread { web.clearCache(false) }
+            emit("cleaned", JSONObject())
+        }
+    }
+
+    /** Free memory: close the voice model and ask the page's engine to drop what it can. */
+    @JavascriptInterface
+    fun freeMemory() {
+        speakQueue.execute {
+            engine.release()
+            System.gc()
+            emit("cleaned", JSONObject())
+        }
+    }
+
+    /** Ask Android to let Voicebook keep working in the background (Android shows a yes/no). */
+    @JavascriptInterface
+    fun allowBackground() {
+        act.runOnUiThread {
+            try {
+                act.startActivity(Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${act.packageName}")))
+            } catch (_: Throwable) {
+                act.startActivity(Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        }
+    }
+
+    /** Android's own storage screen ("Free up space") for the rest of the phone. */
+    @JavascriptInterface
+    fun openStorageSettings() {
+        act.runOnUiThread {
+            try {
+                act.startActivity(Intent(android.provider.Settings.ACTION_INTERNAL_STORAGE_SETTINGS))
+            } catch (_: Throwable) {
+                act.startActivity(Intent(android.provider.Settings.ACTION_SETTINGS))
+            }
+        }
+    }
+
     @JavascriptInterface
     fun openExternal(url: String) {
         act.runOnUiThread { act.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }

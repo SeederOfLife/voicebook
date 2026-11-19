@@ -14,6 +14,7 @@ import { ANDROID_APK_URL, inAndroidApp, NATIVE_TIERS, type FoundFile, type Nativ
 import { LibraryView } from "./library-view";
 import { api, asset, findServer } from "@/lib/paths";
 import { ShareDialog } from "./share-dialog";
+import { StoragePanel } from "./storage-panel";
 import { shelfFor } from "@/lib/shelf";
 
 const PROVIDER_LABEL: Record<Provider, string> = {
@@ -249,6 +250,7 @@ export default function Home() {
   const [importNote, setImportNote] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [sharingOpen, setSharingOpen] = useState(false);
+  const [storageOpen, setStorageOpen] = useState(false);
 
   /** Add books to the library without opening them (several at once). */
   const importFiles = async (files: File[], source?: string, folders?: (string | undefined)[]) => {
@@ -489,6 +491,7 @@ export default function Home() {
                   </>
                 )}
                 <button className="btn" onClick={() => setSharingOpen(true)}>⇄ Share with another device</button>
+                {e && <button className="btn" onClick={() => setStorageOpen(true)}>🧹 Storage & speed</button>}
               </div>
 
               <button className="dropzone" onClick={() => fileRef.current?.click()} disabled={!!busy}
@@ -874,6 +877,7 @@ export default function Home() {
       )}
 
       {/* ---------- Modals ---------- */}
+      {storageOpen && e && <StoragePanel e={e} books={books} onClose={() => setStorageOpen(false)} onChanged={refreshBooks} />}
       {sharingOpen && <ShareDialog books={books} onClose={() => setSharingOpen(false)} onReceived={refreshBooks} />}
       {scan && e && (
         <ScanDialog

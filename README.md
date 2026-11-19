@@ -198,3 +198,12 @@ The app can run without Vercel:
 - Servers accept calls from `CORS_ORIGIN` (default `https://seederoflife.github.io`).
 - The Android app opens the Pages address and falls back to Vercel (or the reverse)
   if one is down.
+
+### Voice server on Google Cloud Run (free tier)
+
+`Dockerfile` (repository root) builds the voice + AI server with the full voice model
+inside; the port comes from `$PORT`. In Google Cloud: Cloud Run → Deploy container →
+"Continuously deploy from a repository" → GitHub `SeederOfLife/voicebook`, branch
+`main`, build type Dockerfile (`/Dockerfile`); memory 2 GiB, 2 CPUs, "CPU is only
+allocated during request processing", minimum instances 0, allow unauthenticated
+access. Add its URL first in the `VOICE_SERVERS` list (Pages workflow).

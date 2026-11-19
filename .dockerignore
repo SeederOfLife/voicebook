@@ -1,0 +1,9 @@
+node_modules
+.next
+out
+.git
+android
+ci
+huggingface
+public/download
+*.apk

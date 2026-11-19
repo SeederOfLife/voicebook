@@ -269,6 +269,12 @@ export class BuiltinVoices {
     }, seconds * 1000);
   }
 
+  /** Close the on-device voice engine to free memory (it starts again when needed). */
+  release() {
+    this.stop(new Error("closed to free memory"));
+    this.onChange();
+  }
+
   private stop(err: Error) {
     this.arm(null);
     this.worker?.terminate();

@@ -331,3 +331,7 @@ label.voice-row { cursor: pointer; }
 .import-row { flex-wrap: wrap; }
 .lib-views { grid-template-columns: repeat(3, 1fr); margin-bottom: 8px; } .shelf.folder > summary { font-weight: 600; }
 .cast-name .aliases { display: block; }
+.storage-grid { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; padding: 10px 12px; border-radius: 12px; background: #ffffff08; }
+.storage-grid .warn { color: #f0c27e; }
+.clean-actions { display: grid; gap: 8px; }
+.clean-actions .btn { text-align: left; }
