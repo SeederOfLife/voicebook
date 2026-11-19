@@ -40,7 +40,10 @@ class MainActivity : Activity() {
     private var startIndex = 0
 
     /** The current address failed: try the next one, or show the offline page. */
-    private fun nextAddress(view: WebView) {
+    private fun nextAddress(view: WebView, failed: Uri) {
+        // Only a failure of the address being tried counts (the same failure can be reported twice).
+        if (startIndex >= START_URLS.size || failed.host != Uri.parse(START_URLS[startIndex]).host) return
+        android.util.Log.i("Voicebook", "address failed: $failed, trying the next one")
         startIndex++
         if (startIndex < START_URLS.size) view.loadUrl(START_URLS[startIndex])
         else view.loadUrl("file:///android_asset/offline.html")
@@ -86,12 +89,12 @@ class MainActivity : Activity() {
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) nextAddress(view)
+                if (request.isForMainFrame) nextAddress(view, request.url)
             }
 
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
                 // e.g. 404 (site not published there yet) or 402/403 (host blocked us)
-                if (request.isForMainFrame && response.statusCode >= 400) nextAddress(view)
+                if (request.isForMainFrame && response.statusCode >= 400) nextAddress(view, request.url)
             }
         }
         ServiceWorkerController.getInstance().setServiceWorkerClient(object : ServiceWorkerClient() {
