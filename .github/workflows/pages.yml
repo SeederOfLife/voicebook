@@ -27,7 +27,7 @@ jobs:
           STATIC_EXPORT: "1"
           NEXT_PUBLIC_BASE_PATH: /voicebook
           # Voice/AI servers, tried in order (change in Settings → Variables → VOICE_SERVERS).
-          NEXT_PUBLIC_API_BASES: ${{ vars.VOICE_SERVERS || 'https://seederoflife-voicebook.hf.space,https://voicebook-lake.vercel.app' }}
+          NEXT_PUBLIC_API_BASES: ${{ vars.VOICE_SERVERS || 'https://92-5-102-187.sslip.io,https://seederoflife-voicebook.hf.space,https://voicebook-lake.vercel.app' }}
           NEXT_TELEMETRY_DISABLED: "1"
         run: |
           rm -rf app/api
