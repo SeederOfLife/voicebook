@@ -7,6 +7,7 @@ import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 import org.json.JSONObject
@@ -23,16 +24,18 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * The studio voice (Kokoro v1.0) running natively on the phone's processor, on several
- * cores, through sherpa-onnx. Two sizes: "fast" (8-bit, 132 MB) and "best" (full
- * precision, 350 MB). The model is downloaded once from sherpa-onnx's GitHub release.
+ * Neural voices running natively on the phone's processor, on several cores, through
+ * sherpa-onnx. Three sizes: "light" (Piper, LibriTTS-R, 904 speakers, 82 MB, many times
+ * faster: for budget phones), "fast" (Kokoro v1.0 8-bit, 132 MB) and "best" (Kokoro full
+ * precision, 350 MB). Each is downloaded once from sherpa-onnx's GitHub release.
  */
 class VoiceEngine(private val ctx: Context) {
-    data class Tier(val id: String, val pkg: String, val model: String, val mb: Int)
+    data class Tier(val id: String, val pkg: String, val model: String, val mb: Int, val vits: Boolean = false)
 
     companion object {
         const val TAG = "Voicebook"
         val TIERS = mapOf(
+            "light" to Tier("light", "vits-piper-en_US-libritts_r-medium", "en_US-libritts_r-medium.onnx", 82, vits = true),
             "fast" to Tier("fast", "kokoro-int8-multi-lang-v1_0", "model.int8.onnx", 132),
             "best" to Tier("best", "kokoro-multi-lang-v1_0", "model.onnx", 350),
         )
@@ -127,7 +130,7 @@ class VoiceEngine(private val ctx: Context) {
                 val buf = ByteArray(1 shl 16)
                 while (e != null) {
                     val name = e.name.removePrefix("./").removePrefix(prefix)
-                    val wanted = name == t.model || name == "voices.bin" || name == "tokens.txt" ||
+                    val wanted = name == t.model || name == "voices.bin" || name == t.model + ".json" || name == "tokens.txt" ||
                         name == "lexicon-us-en.txt" || name == "lexicon-gb-en.txt" || name.startsWith("espeak-ng-data/")
                     if (wanted && !name.contains("..")) {
                         val out = File(tmp, name)
@@ -147,7 +150,7 @@ class VoiceEngine(private val ctx: Context) {
                 }
             }
             conn.disconnect()
-            if (!File(tmp, t.model).exists() || !File(tmp, "voices.bin").exists()) throw RuntimeException("the download was incomplete")
+            if (!File(tmp, t.model).exists() || (!t.vits && !File(tmp, "voices.bin").exists())) throw RuntimeException("the download was incomplete")
             File(tmp, ".complete").writeText("ok")
             val final = dir(t)
             final.deleteRecursively()
@@ -185,7 +188,20 @@ class VoiceEngine(private val ctx: Context) {
         val t = TIERS[id] ?: throw IllegalArgumentException("unknown size $id")
         if (!isReady(id)) throw IllegalStateException("the ${t.mb} MB voice is not downloaded yet")
         val d = dir(t).absolutePath
-        val config = OfflineTtsConfig(
+        val config = if (t.vits) OfflineTtsConfig(
+            model = OfflineTtsModelConfig(
+                vits = OfflineTtsVitsModelConfig(
+                    model = "$d/${t.model}",
+                    tokens = "$d/tokens.txt",
+                    dataDir = "$d/espeak-ng-data",
+                ),
+                numThreads = threads,
+                debug = false,
+                provider = "cpu",
+            ),
+            maxNumSentences = 1,
+            silenceScale = 0.2f,
+        ) else OfflineTtsConfig(
             model = OfflineTtsModelConfig(
                 kokoro = OfflineTtsKokoroModelConfig(
                     model = "$d/${t.model}",

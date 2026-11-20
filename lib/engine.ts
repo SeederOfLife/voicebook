@@ -285,6 +285,10 @@ export class ReaderEngine {
     this.audio.preload = "auto";
     this.builtin = new BuiltinVoices(onChange);
     this.native = new NativeVoice(onChange);
+    this.native.onSlow = () => {
+      this.notice = "This phone was too slow for that voice (long pauses), so it switched to the Light phone voice: many times faster. It downloads once (82 MB). You can change it under Voice.";
+      onChange();
+    };
     if (this.builtin.notice) this.notice = this.builtin.notice;
     this.password = store.get("vb:password") ?? "";
     this.rate = Number(store.get("vb:rate")) || 1;

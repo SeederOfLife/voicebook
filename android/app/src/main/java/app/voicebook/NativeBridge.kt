@@ -74,9 +74,11 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         speakQueue.execute {
             try {
                 val f = File(outDir, "$id.wav")
+                val started = System.nanoTime()
                 val seconds = engine.speak(tier, text, sid, speed.toFloat(), f)
+                val took = (System.nanoTime() - started) / 1e9
                 audio[id] = f
-                emit("result", JSONObject().put("id", id).put("url", "/__native/audio/$id.wav").put("seconds", seconds))
+                emit("result", JSONObject().put("id", id).put("url", "/__native/audio/$id.wav").put("seconds", seconds).put("took", took).put("tier", tier))
             } catch (e: Throwable) {
                 Log.e(VoiceEngine.TAG, "speak failed", e)
                 emit("result", JSONObject().put("id", id).put("error", e.message ?: e.toString()))
@@ -334,17 +336,17 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         return WebResourceResponse("audio/wav", null, 200, "OK", headers, FileInputStream(f))
     }
 
-    /** Started by the build server's emulator test: download the fast voice and speak a sentence. */
+    /** Started by the build server's emulator test: download the light voice and speak a sentence. */
     fun selfTest() {
         downloads.execute {
             try {
                 Log.i("VBTEST", "start: ${engine.cores} cores, ${engine.memoryMb} MB")
                 val t0 = System.currentTimeMillis()
-                engine.download("fast") { p -> Log.i("VBTEST", "download ${(p * 100).toInt()}%") }
+                engine.download("light") { p -> Log.i("VBTEST", "download ${(p * 100).toInt()}%") }
                 Log.i("VBTEST", "downloaded in ${(System.currentTimeMillis() - t0) / 1000} s")
                 val out = File(act.getExternalFilesDir(null) ?: act.filesDir, "selftest.wav")
                 val t1 = System.currentTimeMillis()
-                val seconds = engine.speak("fast", "The storm had been building since noon, and by the time Elena reached the lighthouse, the sea was throwing itself against the rocks. Dr. Smith paid \$3.50 at 7:05.", 3, 1.0f, out)
+                val seconds = engine.speak("light", "The storm had been building since noon, and by the time Elena reached the lighthouse, the sea was throwing itself against the rocks. Dr. Smith paid \$3.50 at 7:05.", 69, 1.0f, out)
                 val took = (System.currentTimeMillis() - t1) / 1000.0
                 Log.i("VBTEST", "spoke %.1f s of audio in %.1f s -> ${out.absolutePath}".format(seconds, took))
                 Log.i("VBTEST", "done ok")

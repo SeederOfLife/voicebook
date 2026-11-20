@@ -4,7 +4,7 @@
 
 import { asset } from "./paths";
 
-export type NativeTier = "fast" | "best";
+export type NativeTier = "light" | "fast" | "best";
 
 interface Bridge {
   info(): string;
@@ -66,7 +66,7 @@ interface Info {
   cores: number;
   threads: number;
   memoryMb: number;
-  tiers: Record<NativeTier, TierStatus>;
+  tiers: Partial<Record<NativeTier, TierStatus>>;
 }
 
 /** Speaker numbers in the native model (checked against the voice files). */
@@ -77,7 +77,17 @@ export const NATIVE_SIDS: Record<string, number> = {
   bf_lily: 23, bm_daniel: 24, bm_fable: 25, bm_george: 26, bm_lewis: 27,
 };
 
+/**
+ * The light voice (Piper, LibriTTS-R: 904 readers) has its own speakers. Each studio voice
+ * maps to a reader of the same gender, spread by pitch so characters stay distinct
+ * (measured: women 196–280 Hz, men 80–132 Hz).
+ */
+export const LIGHT_SIDS: Record<string, number> = {
+  af_alloy: 354, af_aoede: 447, af_bella: 150, af_heart: 69, af_jessica: 141, af_kore: 579, af_nicole: 378, af_nova: 408, af_river: 558, af_sarah: 180, af_sky: 54, am_adam: 855, am_echo: 24, am_eric: 495, am_fenrir: 531, am_liam: 888, am_michael: 858, am_onyx: 339, am_puck: 690, am_santa: 90, bf_alice: 336, bf_emma: 93, bf_isabella: 450, bf_lily: 9, bm_daniel: 219, bm_fable: 243, bm_george: 168, bm_lewis: 369,
+};
+
 export const NATIVE_TIERS: Record<NativeTier, { name: string; blurb: string }> = {
+  light: { name: "Light", blurb: "A lighter voice, many times faster. For budget phones: reads without pauses." },
   fast: { name: "Fast", blurb: "Compressed studio voice. Quick on most phones, very close in quality." },
   best: { name: "Best", blurb: "The full studio voice, exactly like the server. Needs a recent phone (6 GB+ memory)." },
 };
@@ -104,6 +114,9 @@ export class NativeVoice {
   /** null = not updating, 0–1 = downloading the update. */
   updateProgress: number | null = null;
   updateError: string | null = null;
+  /** Called once when this phone proves too slow for the chosen voice and Light takes over. */
+  onSlow: (() => void) | null = null;
+  private slowCount = 0;
   /** Called with the books found when a folder scan finishes. */
   onScan: ((r: ScanResult) => void) | null = null;
 
@@ -116,16 +129,28 @@ export class NativeVoice {
     try {
       saved = localStorage.getItem(TIER_KEY);
     } catch {}
-    this.tier = saved === "best" || saved === "fast" ? saved : this.recommended;
+    this.tier = saved === "best" || saved === "fast" || (saved === "light" && this.hasLight) ? saved : this.recommended;
   }
 
   get available() {
     return !!bridge();
   }
 
-  /** Best on phones with plenty of memory, else Fast. */
+  /** This app has the Light voice (app 1.17+). */
+  get hasLight() {
+    return !!this.info?.tiers?.light;
+  }
+
+  /** The sizes this app offers, lightest first. */
+  get tiers(): NativeTier[] {
+    return (["light", "fast", "best"] as NativeTier[]).filter((t) => this.info?.tiers?.[t]);
+  }
+
+  /** Budget phones get Light; Kokoro needs a strong processor to keep up with reading. */
   get recommended(): NativeTier {
-    return (this.info?.memoryMb ?? 0) >= 5500 ? "best" : "fast";
+    const mb = this.info?.memoryMb ?? 0;
+    if (!this.hasLight) return mb >= 5500 ? "best" : "fast";
+    return mb >= 11000 ? "best" : mb >= 7500 ? "fast" : "light";
   }
 
   status(t: NativeTier = this.tier): TierStatus | null {
@@ -280,8 +305,23 @@ export class NativeVoice {
     const id = `n${Date.now().toString(36)}${++this.seq}`;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
-      b.speak(id, this.tier, text, NATIVE_SIDS[voice] ?? 3, speed);
+      const sid = this.tier === "light" ? LIGHT_SIDS[voice] ?? LIGHT_SIDS.af_heart : NATIVE_SIDS[voice] ?? 3;
+      b.speak(id, this.tier, text, sid, speed);
     });
+  }
+
+  /**
+   * Making a passage slower than it takes to read it means pauses that never catch up.
+   * Twice in a row on Fast or Best → switch to Light (downloads once, 82 MB).
+   */
+  private watchSpeed(took: number, seconds: number, tier: string) {
+    if (!(took > 0 && seconds > 0) || tier === "light" || !this.hasLight || this.tier === "light") return;
+    this.slowCount = took > seconds * 0.95 ? this.slowCount + 1 : 0;
+    if (this.slowCount < 2) return;
+    this.slowCount = 0;
+    this.setTier("light");
+    this.download("light");
+    this.onSlow?.();
   }
 
   private onEvent(type: string, d: Record<string, unknown>) {
@@ -308,7 +348,10 @@ export class NativeVoice {
       if (!job) return;
       this.pending.delete(String(d.id));
       if (d.error) job.reject(new Error(`the phone voice failed: ${d.error}`));
-      else
+      else {
+        this.watchSpeed(Number(d.took), Number(d.seconds), String(d.tier ?? ""));
+      }
+      if (!d.error)
         fetch(String(d.url))
           .then((r) => {
             if (!r.ok) throw new Error(`the phone voice's audio was missing (${r.status})`);

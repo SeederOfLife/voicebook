@@ -540,7 +540,7 @@ export default function Home() {
                     <p className="muted">Downloading… {Math.round(e.native.progress * 100)}% (keep the app open)</p>
                   ) : (
                     <button className="btn primary" onClick={() => { e.native.download(); e.setProvider("native"); }}>
-                      Download ({e.native.status()?.mb ?? "?"} MB, {e.native.tier === "best" ? "best quality" : "fast"})
+                      Download ({e.native.status()?.mb ?? "?"} MB, {e.native.tier === "best" ? "best quality" : e.native.tier === "light" ? "light and quick" : "fast"})
                     </button>
                   )}
                 </div>
@@ -1149,12 +1149,12 @@ function NativePanel({ e }: { e: ReaderEngine }) {
   return (
     <div className="studio-info small ondevice">
       <p>
-        <strong>Phone AI voice.</strong> The studio voice made by this phone itself
+        <strong>Phone AI voice.</strong> A natural voice made by this phone itself
         {info ? `, on ${info.threads} of its ${info.cores} processor cores` : ""}: works offline, no monthly limit, keeps reading with the screen off.
       </p>
       {n.error && <p className="tip">{n.error}</p>}
       <div className="tiers" role="radiogroup" aria-label="Voice size">
-        {(["fast", "best"] as NativeTier[]).map((t) => {
+        {n.tiers.map((t) => {
           const s = n.status(t);
           const chosen = n.tier === t;
           return (

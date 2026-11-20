@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReaderEngine } from "@/lib/engine";
 import { library, type BookSummary } from "@/lib/library";
-import type { NativeStorage } from "@/lib/native";
+import { NATIVE_TIERS, type NativeStorage } from "@/lib/native";
 import { TIERS } from "@/lib/builtin";
 
 const size = (b: number) =>
@@ -113,12 +113,12 @@ export function StoragePanel({ e, books, onClose, onChanged }: { e: ReaderEngine
               Remove on-device voices ({webVoices.map((t) => `${TIERS[t].name} ${TIERS[t].mb} MB`).join(", ")})
             </button>
           )}
-          {phone && (["fast", "best"] as const).filter((t) => e.native.status(t)?.ready && !(e.native.tier === t)).map((t) => (
+          {phone && e.native.tiers.filter((t) => e.native.status(t)?.ready && !(e.native.tier === t)).map((t) => (
             <button key={t} className="btn" onClick={async () => {
               e.native.remove(t);
-              setTimeout(() => void say(`The ${t === "best" ? "Best" : "Fast"} phone voice was removed.`), 800);
+              setTimeout(() => void say(`The ${NATIVE_TIERS[t].name} phone voice was removed.`), 800);
             }}>
-              Remove the unused {t === "best" ? "Best (350 MB)" : "Fast (132 MB)"} phone voice
+              Remove the unused {NATIVE_TIERS[t].name} ({e.native.status(t)?.mb} MB) phone voice
             </button>
           ))}
           {phone && phone.cacheBytes > 0 && (
