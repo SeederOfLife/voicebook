@@ -37,7 +37,7 @@ for SL in $(oci network subnet get --subnet-id "$SUB" --query 'data."security-li
 done
 
 say "Login key for Cloud Shell"
-[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519
+[ -f ~/.ssh/id_rsa ] || ssh-keygen -q -t rsa -b 3072 -N "" -f ~/.ssh/id_rsa
 printf '#!/bin/bash\ncurl -fsSL https://raw.githubusercontent.com/SeederOfLife/voicebook/main/deploy/oracle-setup.sh | bash\n' > /tmp/vb-init.sh
 
 say "Creating the new server (a few minutes)"
@@ -47,7 +47,7 @@ for TRY_AD in "$AD" $(oci iam availability-domain list -c "$C" --query 'data[].n
   if NEW=$(oci compute instance launch -c "$C" --availability-domain "$TRY_AD" \
       --shape VM.Standard.A1.Flex --shape-config '{"ocpus":2,"memoryInGBs":12}' \
       --image-id "$IMG" --subnet-id "$SUB" --assign-public-ip true --display-name voicebook \
-      --ssh-authorized-keys-file ~/.ssh/id_ed25519.pub --user-data-file /tmp/vb-init.sh \
+      --ssh-authorized-keys-file ~/.ssh/id_rsa.pub --user-data-file /tmp/vb-init.sh \
       --wait-for-state RUNNING --max-wait-seconds 900 --query 'data.id' --raw-output 2>/tmp/vb-err.txt); then
     break
   fi
