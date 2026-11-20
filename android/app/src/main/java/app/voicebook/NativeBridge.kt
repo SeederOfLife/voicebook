@@ -92,6 +92,12 @@ class NativeBridge(private val act: MainActivity, private val web: WebView) {
         act.runOnUiThread { PlaybackService.update(act, playing, title, subtitle) }
     }
 
+    /** The lock-screen player: state, book, chapter and progress through the book (0–1, or -1). */
+    @JavascriptInterface
+    fun setMedia(playing: Boolean, title: String, subtitle: String, progress: Double) {
+        act.runOnUiThread { PlaybackService.update(act, playing, title, subtitle, progress) }
+    }
+
     /** Download the newer app and open Android's install screen (one tap, keeps everything). */
     @JavascriptInterface
     fun installUpdate(url: String) {

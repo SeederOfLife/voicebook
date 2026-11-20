@@ -7,7 +7,7 @@ import { BuiltinVoices, builtinSupported, type DeviceKind, type Tier } from "./b
 import { heuristicAnalyze } from "./heuristic";
 import { scanCharacters } from "./cast-scan";
 import { NativeVoice } from "./native";
-import { api } from "./paths";
+import { api, asset } from "./paths";
 import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
 import { FX_SPEAKER, fxUrl, splitEffects, SYSTEM_SPEAKER, type FxKind } from "./fx";
@@ -54,6 +54,10 @@ export interface Prefs {
   pauses: number;
   /** Device voice: give characters a different pitch by gender and age */
   characterPitch: boolean;
+  /** The reading cursor: follow each word as it is spoken, or only light up the passage */
+  cursor: "word" | "line";
+  /** Per voice: move the reading cursor earlier (−) or later (+), in seconds */
+  cursorShift: Record<string, number>;
 }
 
 const DEFAULT_PREFS: Prefs = {
@@ -65,6 +69,8 @@ const DEFAULT_PREFS: Prefs = {
   expressiveness: 0.5,
   pauses: 1,
   characterPitch: false,
+  cursor: "word",
+  cursorShift: {},
 };
 
 /** What a device has asked of the server's studio voice this month. */
@@ -250,6 +256,11 @@ export class ReaderEngine {
   accessToken = "";
   browserVoices: VoiceOption[] = [];
   prefs: Prefs = { ...DEFAULT_PREFS };
+  /** The passage being heard right now (for the reading cursor). */
+  current: Passage | null = null;
+  /** Device voice: the character of the passage it has reached (word boundaries), or -1. */
+  private boundary = -1;
+  private cursorMap: { key: string; starts: number[]; ends: number[]; cum: Float32Array } | null = null;
   soundscape = new Soundscape();
   builtin: BuiltinVoices;
   /** The Android app's native phone voice (absent elsewhere). */
@@ -321,10 +332,19 @@ export class ReaderEngine {
       window.speechSynthesis.addEventListener?.("voiceschanged", load);
     }
     if ("mediaSession" in navigator) {
-      navigator.mediaSession.setActionHandler("play", () => this.play());
-      navigator.mediaSession.setActionHandler("pause", () => this.pause());
-      navigator.mediaSession.setActionHandler("nexttrack", () => this.next());
-      navigator.mediaSession.setActionHandler("previoustrack", () => this.previous());
+      // The lock screen, headset and car controls (iPhone, browsers; the Android app adds its own player).
+      const on = (a: MediaSessionAction, f: () => void) => {
+        try {
+          navigator.mediaSession.setActionHandler(a, f);
+        } catch {}
+      };
+      on("play", () => this.play());
+      on("pause", () => this.pause());
+      on("stop", () => this.pause());
+      on("nexttrack", () => this.next());
+      on("previoustrack", () => this.previous());
+      on("seekforward", () => this.next());
+      on("seekbackward", () => this.previous());
     }
     window.setInterval(() => this.watchdog(), 3000);
     window.addEventListener("pagehide", () => this.savePosition());
@@ -984,6 +1004,79 @@ export class ReaderEngine {
     return { start, end, speaker, voice, text, tailMs, seg: first, key: this.keyOf(this.provider, voice, text, tailMs, first) };
   }
 
+  /**
+   * Where the voice is right now: the line and the character within it. Worked out from
+   * the audio's own progress (so it follows every voice's real speed, and the playback
+   * speed), weighted for the pauses at punctuation; the device voice reports its words.
+   */
+  cursor(): { seg: number; char: number } | null {
+    const p = this.current;
+    if (!p || !this.playing || this.buffering || p.seg.fx || this.prefs.cursor !== "word") return null;
+    if (p.start !== this.index) return null;
+    const map = this.cursorMapFor(p);
+    let pos: number;
+    if (this.spokenBy === "browser") {
+      if (this.boundary < 0) return null;
+      pos = this.boundary;
+    } else {
+      const a = this.audio;
+      const dur = a.duration;
+      if (!isFinite(dur) || dur <= 0) return null;
+      const tail = this.spokenBy === "studio" ? Math.min(dur * 0.5, p.tailMs / 1000) : 0;
+      const shift = this.prefs.cursorShift[p.voice] ?? 0;
+      const lead = 0.08;
+      const f = Math.min(1, Math.max(0, (a.currentTime + shift * this.rate - lead) / Math.max(0.2, dur - tail - lead)));
+      const goal = f * map.cum[map.cum.length - 1];
+      let lo = 0, hi = map.cum.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (map.cum[mid] < goal) lo = mid + 1;
+        else hi = mid;
+      }
+      pos = lo;
+    }
+    for (let k = map.starts.length - 1; k >= 0; k--) {
+      if (pos >= map.starts[k]) return { seg: p.start + k, char: Math.min(pos - map.starts[k], Math.max(0, map.ends[k] - map.starts[k] - 1)) };
+    }
+    return { seg: p.start, char: 0 };
+  }
+
+  /** Where each line sits in the passage's text, and how long each character "takes". */
+  private cursorMapFor(p: Passage) {
+    if (this.cursorMap?.key === p.key) return this.cursorMap;
+    const whole = PASSAGE_CHARS[this.provider] > 0;
+    const starts: number[] = [];
+    const ends: number[] = [];
+    let pos = 0;
+    for (let k = p.start; k <= p.end; k++) {
+      const s = this.segments[k];
+      const line = s.text.trim();
+      const q = whole && this.oneVoice && s.quote ? s.quote : 0;
+      if (k > p.start) pos += 1;
+      const open = q & 1 ? 1 : 0;
+      starts.push(pos + open);
+      ends.push(pos + open + line.length);
+      pos += open + line.length + (q & 2 ? 1 : 0);
+    }
+    const text = p.text;
+    const cum = new Float32Array(text.length);
+    let total = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i];
+      total += /[.!?…]/.test(c) ? 7 : /[,;:—–]/.test(c) ? 3.5 : c === "\n" ? 6 : /\s/.test(c) ? 1.1 : 1;
+      cum[i] = total;
+    }
+    this.cursorMap = { key: p.key, starts, ends, cum };
+    return this.cursorMap;
+  }
+
+  /** Move the reading cursor earlier or later for one voice (seconds). */
+  shiftCursor(voice: string, by: number) {
+    const now = this.prefs.cursorShift[voice] ?? 0;
+    const next = Math.round(Math.min(2, Math.max(-2, now + by)) * 10) / 10;
+    this.setPrefs({ cursorShift: { ...this.prefs.cursorShift, [voice]: next } });
+  }
+
   /** Point at the start of the passage containing line `i`. */
   private snap(i: number) {
     const p = this.passageAt(i);
@@ -1592,6 +1685,8 @@ export class ReaderEngine {
     a.playbackRate = this.rate;
     this.loadedKey = by === this.provider ? p.key : "";
     this.spokenBy = by;
+    this.current = p;
+    this.boundary = -1;
     a.onended = () => t === this.token && this.advance();
     a.onerror = () => t === this.token && this.fail(new Error("This passage's audio couldn't be played. Tap play to try again."));
     this.playSfx(p, t);
@@ -1636,7 +1731,12 @@ export class ReaderEngine {
     this.applySound(p);
     if ("mediaSession" in navigator) {
       const ch = this.chapters[this.currentChapterIndex()];
-      navigator.mediaSession.metadata = new MediaMetadata({ title: ch?.title || this.title, artist: this.title, album: "Voicebook" });
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: ch?.title || this.title,
+        artist: this.title,
+        album: "Voicebook",
+        artwork: [192, 512].map((n) => ({ src: asset(`/icons/icon-${n}.png`), sizes: `${n}x${n}`, type: "image/png" })),
+      });
       navigator.mediaSession.playbackState = "playing";
     }
     if (this.sfxOn) {
@@ -1713,10 +1813,20 @@ export class ReaderEngine {
     // Voices stored on the device read a whole passage in one breath, which sounds most natural.
     // Only online voices need sentence-sized pieces (some browsers cut them off after ~15 s).
     const pieces = v && v.localService === false ? splitSentences(p.text, 180) : [p.text];
+    this.current = p;
+    this.boundary = -1;
+    const offsets: number[] = [];
+    let from = 0;
+    for (const piece of pieces) {
+      const at = p.text.indexOf(piece, from);
+      offsets.push(at >= 0 ? at : from);
+      from = (at >= 0 ? at : from) + piece.length;
+    }
     const speakPiece = (i: number) => {
       if (t !== this.token) return;
       if (i >= pieces.length) return onEnd();
       const u = new SpeechSynthesisUtterance(pieces[i]);
+      u.onboundary = (ev) => { if (t === this.token) this.boundary = offsets[i] + ev.charIndex; };
       if (v) u.voice = v;
       u.lang = v?.lang || this.meta.language || "en";
       u.rate = Math.min(4, prosody.rate * this.rate);

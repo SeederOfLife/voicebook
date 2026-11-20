@@ -51,7 +51,15 @@ class MainActivity : Activity() {
 
     private val toggleReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            web.evaluateJavascript("window.__voicebook && (window.__voicebook.playing ? window.__voicebook.pause() : window.__voicebook.play())", null)
+            // Lock screen, notification, headset and Bluetooth buttons → the reader on the page.
+            val js = when (intent?.getStringExtra("cmd") ?: "toggle") {
+                "play" -> "e.play()"
+                "pause" -> "e.pause()"
+                "next" -> "e.next()"
+                "previous" -> "e.previous()"
+                else -> "(e.playing ? e.pause() : e.play())"
+            }
+            web.evaluateJavascript("(function(){var e=window.__voicebook; if(e){$js}})()", null)
         }
     }
 

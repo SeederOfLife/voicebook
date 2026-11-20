@@ -40,6 +40,22 @@ const OFFLINE_CONFIG: AppConfig = {
   voices: { openai: [], elevenlabs: [] },
 };
 
+const PROVIDER_BLURB: Record<Provider, string> = {
+  studio: "The best voice, made on the voice server. Needs internet; saved passages play offline.",
+  elevenlabs: "Lifelike acting voices with emotions (needs a voice key).",
+  openai: "Expressive voices (needs a voice key).",
+  builtin: "Made in the browser on this device, after one download. Works offline.",
+  native: "Made by this phone's processor, after one download. Works offline, no limits.",
+  browser: "The device's own voices. Instant, works everywhere, sounds plainer.",
+};
+
+const HOME_PAGES = [
+  { icon: "📚", label: "Library" },
+  { icon: "＋", label: "Add" },
+  { icon: "🎙", label: "Voice" },
+  { icon: "⚙", label: "Settings" },
+];
+
 const MUSIC_LABEL = { off: "Off", moments: "At key moments", always: "All the time" } as const;
 
 const GENRE_LABEL: Record<string, string> = {
@@ -116,6 +132,17 @@ export default function Home() {
   const [email, setEmail] = useState("");
   const [authMsg, setAuthMsg] = useState<string | null>(null);
   const activeRef = useRef<HTMLSpanElement | null>(null);
+  const pagesRef = useRef<HTMLDivElement | null>(null);
+  const [homePage, setHomePage] = useState(0);
+  const goPage = (n: number) => {
+    const el = pagesRef.current;
+    if (el) el.scrollTo({ left: n * el.clientWidth, behavior: "smooth" });
+    setHomePage(n);
+  };
+  const onPagesScroll = () => {
+    const el = pagesRef.current;
+    if (el) setHomePage(Math.round(el.scrollLeft / Math.max(1, el.clientWidth)));
+  };
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   const refreshBooks = useCallback(() => library.list().then(setBooks), []);
@@ -149,12 +176,14 @@ export default function Home() {
 
   const playingNow = engineRef.current?.playing ?? false;
   const titleNow = engineRef.current?.title ?? "";
+  const chapterNow = engineRef.current ? engineRef.current.chapters[engineRef.current.currentChapterIndex()]?.title ?? "" : "";
+  const percentNow = engineRef.current?.chunks.length ? Math.round(engineRef.current.progress() * 100) : -1;
   useEffect(() => {
     const e = engineRef.current;
-    if (!e) return;
-    const ch = e.chapters[e.currentChapterIndex()]?.title ?? "";
-    e.native.setPlaying(playingNow, titleNow || "Voicebook", ch);
-  }, [playingNow, titleNow]);
+    if (!e || (!titleNow && !playingNow)) return;
+    // The lock screen / notification player: book, chapter, play state, progress.
+    e.native.setPlaying(playingNow, titleNow || "Voicebook", chapterNow, percentNow >= 0 ? percentNow / 100 : -1);
+  }, [playingNow, titleNow, chapterNow, percentNow]);
 
   useEffect(() => {
     const e = new ReaderEngine(() => setTick((t) => t + 1));
@@ -426,20 +455,8 @@ export default function Home() {
           </button>
         </div>
         <div className="row gap-s">
-          {!signedOut && (
-            <select
-              className="provider"
-              value={e.provider}
-              onChange={(x) => e.setProvider(x.target.value as Provider)}
-              aria-label="Voice engine"
-            >
-              {e.availableProviders().map((p) => (
-                <option key={p} value={p}>{PROVIDER_LABEL[p]}</option>
-              ))}
-              {e.lockedProviders().map((p) => (
-                <option key={p} value={p}>🔒 {PROVIDER_LABEL[p]}</option>
-              ))}
-            </select>
+          {hasBook && !signedOut && (
+            <button className="icon-btn" onClick={() => setPanel("cast")} aria-label="Voices">🎭</button>
           )}
           {cfg.mode === "accounts" && (
             <button className="avatar" onClick={() => setModal(cfg.user ? "account" : "signin")} aria-label="Account">
@@ -450,68 +467,143 @@ export default function Home() {
         </div>
       </header>
 
-      {/* ---------- Home / library ---------- */}
-      {!hasBook && (
+      {/* ---------- Home: swipeable pages ---------- */}
+      {!hasBook && signedOut && (
         <section className="hero">
           <h1>Any book, read to you <em>in a studio voice.</em></h1>
-          <p className="muted">
-            Drop in a PDF, EPUB or text and press play. Voicebook finds the chapters, remembers where you stopped,
-            and keeps the audio on your device so it never has to be made twice.
-          </p>
-
-          {signedOut ? (
-            <div className="card">
-              <h3 className="card-title">Sign in to start listening</h3>
-              {signInForm}
-            </div>
-          ) : (
-            <>
-              {books.length > 0 && (
-                <LibraryView
-                  books={books}
-                  onOpen={resumeBook}
-                  onRemove={async (b) => {
-                    if (confirm(`Remove “${b.title}” from your library?`)) {
-                      await library.remove(b.id);
-                      refreshBooks();
-                    }
-                  }}
-                />
-              )}
-
+          <div className="card">
+            <h3 className="card-title">Sign in to start listening</h3>
+            {signInForm}
+          </div>
+        </section>
+      )}
+      {!hasBook && !signedOut && (
+        <section className="home">
+          <div className="pages" ref={pagesRef} onScroll={onPagesScroll}>
+            {/* 1 · Library */}
+            <div className="page">
               {serverWait && <p className="muted small notice">⏳ {serverWait}</p>}
               {importNote && <p className="muted small notice">{importNote}</p>}
-              <div className="row gap import-row">
-                {e?.native.available && e.native.canScan && (
-                  <>
-                    <button className="btn" disabled={!!busy} onClick={() => e.native.scanPhone()}>📱 Find books on this phone</button>
-                    {e.native.canScanPhone && (
-                      <button className="btn" disabled={!!busy} onClick={() => e.native.scanFolder()}>📁 Choose a folder</button>
-                    )}
-                  </>
-                )}
-                <button className="btn" onClick={() => setSharingOpen(true)}>⇄ Share with another device</button>
-                {e && <button className="btn" onClick={() => setStorageOpen(true)}>🧹 Storage & speed</button>}
-              </div>
+              {loadError && <p className="error">{loadError}</p>}
+              {books.length > 0 ? (
+                <>
+                  <LibraryView
+                    books={books}
+                    onOpen={resumeBook}
+                    onRemove={async (b) => {
+                      if (confirm(`Remove “${b.title}” from your library?`)) {
+                        await library.remove(b.id);
+                        refreshBooks();
+                      }
+                    }}
+                  />
+                </>
+              ) : (
+                <div className="empty">
+                  <h1>Any book, read to you <em>in a studio voice.</em></h1>
+                  <p className="muted">
+                    Add a PDF, EPUB or text and press play. Voicebook finds the chapters and the characters, remembers where you
+                    stopped, and keeps the audio on your device.
+                  </p>
+                  <button className="btn primary" onClick={() => goPage(1)}>＋ Add your first book</button>
+                  <button className="btn" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>Try a sample story</button>
+                </div>
+              )}
+            </div>
 
+            {/* 2 · Add books */}
+            <div className="page">
+              <h2 className="page-title">Add books</h2>
               <button className="dropzone" onClick={() => fileRef.current?.click()} disabled={!!busy}
                 onDragOver={(x) => x.preventDefault()}
                 onDrop={(x) => { x.preventDefault(); if (x.dataTransfer.files.length) onFiles(x.dataTransfer.files); }}>
                 {busy ? <><div className="spinner" /> {busy}</> : <>
                   <span className="drop-icon">📖</span>
-                  <strong>Add books</strong>
+                  <strong>Choose files</strong>
                   <span className="muted small">PDF · EPUB · TXT · several at once · from the phone, Drive or iCloud</span>
                 </>}
               </button>
               <input ref={fileRef} type="file" hidden accept=".pdf,.epub,.txt,.md,.markdown,.html,.htm,application/pdf,text/plain"
                 multiple
                 onChange={(x) => { if (x.target.files?.length) onFiles(x.target.files); x.target.value = ""; }} />
-
-              <div className="row gap">
-                <button className="btn" onClick={() => setShowPaste((s) => !s)}>Paste text</button>
-                <button className="btn" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>Try a sample story</button>
+              <div className="tiles">
+                {e?.native.available && e.native.canScan && (
+                  <>
+                    <button className="tile" disabled={!!busy} onClick={() => e.native.scanPhone()}>
+                      <span>📱</span><strong>Find books on this phone</strong><small className="muted">Looks through your folders</small>
+                    </button>
+                    {e.native.canScanPhone && (
+                      <button className="tile" disabled={!!busy} onClick={() => e.native.scanFolder()}>
+                        <span>📁</span><strong>Choose a folder</strong><small className="muted">Keeps its subfolders</small>
+                      </button>
+                    )}
+                  </>
+                )}
+                <button className="tile" onClick={() => setShowPaste((x) => !x)}>
+                  <span>📋</span><strong>Paste text</strong><small className="muted">An article, a chapter…</small>
+                </button>
+                <button className="tile" onClick={() => setSharingOpen(true)}>
+                  <span>⇄</span><strong>From another device</strong><small className="muted">Send books between your phones</small>
+                </button>
+                <button className="tile" onClick={() => openBook("The Lighthouse Keeper", detectSections(SAMPLE))}>
+                  <span>✨</span><strong>Sample story</strong><small className="muted">Hear what it can do</small>
+                </button>
               </div>
-              {!inAndroidApp() && (!installed || isAndroid()) && <InstallCard evt={installEvt} installed={installed} />}
+              {showPaste && (
+                <div className="paste">
+                  <textarea value={paste} onChange={(x) => setPaste(x.target.value)} placeholder="Paste any text here…" rows={8} />
+                  <button className="btn primary" disabled={!paste.trim()}
+                    onClick={() => openBook(paste.trim().split("\n")[0].slice(0, 50) || "Pasted text", detectSections(paste))}>Read it</button>
+                </div>
+              )}
+            </div>
+
+            {/* 3 · Voice */}
+            <div className="page">
+              <h2 className="page-title">Voice</h2>
+              <div className="provider-cards" role="radiogroup" aria-label="Kind of voice">
+                {e.availableProviders().map((pv) => (
+                  <button key={pv} role="radio" aria-checked={e.provider === pv} className={`provider-card${e.provider === pv ? " chosen" : ""}`} onClick={() => e.setProvider(pv)}>
+                    <strong>{PROVIDER_LABEL[pv]}</strong>
+                    <small className="muted">{PROVIDER_BLURB[pv]}</small>
+                  </button>
+                ))}
+                {e.lockedProviders().map((pv) => (
+                  <button key={pv} className="provider-card locked" onClick={() => e.setProvider(pv)}>
+                    <strong>🔒 {PROVIDER_LABEL[pv]}</strong>
+                    <small className="muted">{PROVIDER_BLURB[pv]}</small>
+                  </button>
+                ))}
+              </div>
+              {inAndroidApp() && !e.native.ready && (
+                <div className="install-card small">
+                  <p>
+                    <strong>📱 Voice for offline listening</strong>
+                    <br />
+                    <span className="muted">With this download, the phone makes the voice itself when there&apos;s no connection.</span>
+                  </p>
+                  {e.native.downloading ? (
+                    <p className="muted">Downloading… {Math.round(e.native.progress * 100)}% (keep the app open)</p>
+                  ) : (
+                    <button className="btn primary" onClick={() => { e.native.download(); e.setProvider("native"); }}>
+                      Download ({e.native.status()?.mb ?? "?"} MB, {e.native.tier === "best" ? "best quality" : e.native.tier === "light" ? "light and quick" : "fast"})
+                    </button>
+                  )}
+                </div>
+              )}
+              {e.provider === "native" && <NativePanel e={e} />}
+              {e.provider === "builtin" && <OnDevicePanel e={e} />}
+              <CursorSettings e={e} />
+              <div className="status-list small">
+                <span className={cfg.providers.studio ? "ok" : "off"}>Studio voice server</span>
+                <span className={cfg.providers.anthropic ? "ok" : "off"}>Characters &amp; emotions (AI key)</span>
+                <span className={cfg.providers.elevenlabs || cfg.providers.openai ? "ok" : "off"}>Acting voices (voice key)</span>
+              </div>
+            </div>
+
+            {/* 4 · Settings */}
+            <div className="page">
+              <h2 className="page-title">Settings</h2>
               {inAndroidApp() && e.native.update && (
                 <div className="install-card small">
                   <p>
@@ -529,45 +621,38 @@ export default function Home() {
                   )}
                 </div>
               )}
-              {inAndroidApp() && !e.native.ready && (
-                <div className="install-card small">
-                  <p>
-                    <strong>📱 Voice for offline listening</strong>
-                    <br />
-                    <span className="muted">Reading uses the studio voice (best quality, needs internet). With this download, the phone makes the voice itself when there&apos;s no connection or the monthly limit is reached.</span>
-                  </p>
-                  {e.native.downloading ? (
-                    <p className="muted">Downloading… {Math.round(e.native.progress * 100)}% (keep the app open)</p>
-                  ) : (
-                    <button className="btn primary" onClick={() => { e.native.download(); e.setProvider("native"); }}>
-                      Download ({e.native.status()?.mb ?? "?"} MB, {e.native.tier === "best" ? "best quality" : e.native.tier === "light" ? "light and quick" : "fast"})
-                    </button>
-                  )}
-                </div>
-              )}
-              {showPaste && (
-                <div className="paste">
-                  <textarea value={paste} onChange={(x) => setPaste(x.target.value)} placeholder="Paste any text here…" rows={8} />
-                  <button className="btn primary" disabled={!paste.trim()}
-                    onClick={() => openBook(paste.trim().split("\n")[0].slice(0, 50) || "Pasted text", detectSections(paste))}>Read it</button>
-                </div>
-              )}
-              {loadError && <p className="error">{loadError}</p>}
-
-              {!premium && cfg.mode === "accounts" && (
-                <button className="card premium-teaser" onClick={() => (e.premiumPrompt = true, setTick((t) => t + 1))}>
-                  <strong>★ Premium</strong>
-                  <span className="muted small">Lifelike expressive voices, accents, sound effects, ambience &amp; background music.</span>
+              <div className="settings-list">
+                <button className="setting" onClick={() => setStorageOpen(true)}>
+                  <span>🧹</span><span><strong>Storage &amp; speed</strong><small className="muted">Free space, clean up, keep reading in the background</small></span><span aria-hidden>›</span>
                 </button>
-              )}
-
-              <div className="status-list small">
-                <span className={cfg.providers.studio ? "ok" : "off"}>Studio voice</span>
-                <span className={cfg.providers.anthropic ? "ok" : "off"}>Characters &amp; emotions (AI key)</span>
-                <span className={cfg.providers.elevenlabs || cfg.providers.openai ? "ok" : "off"}>Acting voices (voice key)</span>
+                <button className="setting" onClick={() => setSharingOpen(true)}>
+                  <span>⇄</span><span><strong>Share with another device</strong><small className="muted">Send or receive books with a 6-digit code</small></span><span aria-hidden>›</span>
+                </button>
+                {cfg.mode === "accounts" && (
+                  <button className="setting" onClick={() => setModal(cfg.user ? "account" : "signin")}>
+                    <span>👤</span><span><strong>{cfg.user ? "Your account" : "Sign in"}</strong><small className="muted">{cfg.user ? cfg.user.email : "Keep your plan on every device"}</small></span><span aria-hidden>›</span>
+                  </button>
+                )}
+                {!premium && cfg.mode === "accounts" && (
+                  <button className="setting" onClick={() => (e.premiumPrompt = true, setTick((t) => t + 1))}>
+                    <span>★</span><span><strong>Premium</strong><small className="muted">Acting voices, accents, ambience and music</small></span><span aria-hidden>›</span>
+                  </button>
+                )}
               </div>
-            </>
-          )}
+              {!inAndroidApp() && (!installed || isAndroid()) && <InstallCard evt={installEvt} installed={installed} />}
+              <p className="muted small credits">
+                Studio voice: Kokoro (Apache 2.0). Light phone voice: Piper, LibriTTS-R (MIT, CC BY 4.0). Sound effects made in the app.
+              </p>
+            </div>
+          </div>
+          <nav className="tabbar" aria-label="Pages">
+            {HOME_PAGES.map((pg, n) => (
+              <button key={pg.label} className={homePage === n ? "on" : ""} onClick={() => goPage(n)} aria-current={homePage === n ? "page" : undefined}>
+                <span aria-hidden>{pg.icon}</span>
+                <small>{pg.label}</small>
+              </button>
+            ))}
+          </nav>
         </section>
       )}
 
@@ -614,8 +699,26 @@ export default function Home() {
               {e.meta.narrationStyle && <p className="muted small style">🎙️ {e.meta.narrationStyle}</p>}
             </section>
 
+            {panel !== "none" && (
+              <div className="modal-bg sheet-bg" onClick={() => setPanel("none")}>
+                <div className="card modal reader-sheet" onClick={(x) => x.stopPropagation()} role="dialog" aria-label="Voices and sound">
+                  <div className="row between sheet-head">
+                    <div className="seg-toggle" role="tablist">
+                      <button role="tab" aria-selected={panel === "cast"} className={panel === "cast" ? "on" : ""} onClick={() => setPanel("cast")}>🎭 Voices</button>
+                      <button role="tab" aria-selected={panel === "sound"} className={panel === "sound" ? "on" : ""} onClick={() => setPanel("sound")}>🎵 Sound</button>
+                    </div>
+                    <button className="icon small-icon" onClick={() => setPanel("none")} aria-label="Close">✕</button>
+                  </div>
             {panel === "cast" && (
-              <section className="cast card">
+              <section className="cast">
+                <label className="field-inline small">
+                  <span className="muted">Kind of voice</span>
+                  <select value={e.provider} onChange={(x) => e.setProvider(x.target.value as Provider)}>
+                    {e.availableProviders().map((pv) => <option key={pv} value={pv}>{PROVIDER_LABEL[pv]}</option>)}
+                    {e.lockedProviders().map((pv) => <option key={pv} value={pv}>🔒 {PROVIDER_LABEL[pv]}</option>)}
+                  </select>
+                </label>
+                <CursorSettings e={e} />
                 {e.provider === "studio" && (
                   <div className="studio-info small">
                     <p>
@@ -756,7 +859,7 @@ export default function Home() {
             )}
 
             {panel === "sound" && (
-              <section className="card sound">
+              <section className="sound">
                 {!premium ? (
                   <div className="locked">
                     <p>🔒 Ambience, background music and sound effects are part of <strong>Premium</strong>.</p>
@@ -790,6 +893,9 @@ export default function Home() {
                   </>
                 )}
               </section>
+            )}
+                </div>
+              </div>
             )}
 
             <article className="reader">
@@ -832,7 +938,9 @@ export default function Home() {
                     >
                       {cast && s.speaker !== "Narrator" && <span className="who">{s.speaker}{EMOTION_ICON[s.emotion] ? ` ${EMOTION_ICON[s.emotion]}` : ""}</span>}
                       {s.sfx && premium && e.prefs.sfx && cfg.providers.elevenlabs && <span className="sfx">🔊</span>}
-                      {!cast && s.quote ? `${s.quote & 1 ? "“" : ""}${s.text}${s.quote & 2 ? "”" : ""}` : s.text}
+                      {active && e.playing && e.prefs.cursor === "word" ? (
+                        <LiveText e={e} i={i} text={s.text} open={!cast && (s.quote ?? 0) & 1 ? "“" : ""} close={!cast && (s.quote ?? 0) & 2 ? "”" : ""} />
+                      ) : !cast && s.quote ? `${s.quote & 1 ? "“" : ""}${s.text}${s.quote & 2 ? "”" : ""}` : s.text}
                     </span>{" "}
                   </span>
                 );
@@ -884,7 +992,7 @@ export default function Home() {
                 {e.buffering ? <span className="spinner" /> : e.playing ? "❚❚" : "▶"}
               </button>
               <button className="icon" onClick={() => e.next()} aria-label="Next">⏭</button>
-              <button className="icon small-icon" onClick={() => setSidebar(true)} aria-label="Chapters">☰</button>
+              <button className="icon small-icon" onClick={() => setPanel("cast")} aria-label="Voices and sound">🎭</button>
             </div>
           </footer>
         </div>
@@ -1061,6 +1169,68 @@ function voiceLabel(e: ReaderEngine, speaker: string): string {
 }
 
 /** Touch the voice that's speaking → choose another one, heard at once. */
+/**
+ * The line being read, with the word the voice is on picked out. It follows the audio's
+ * own progress, so it keeps pace with every voice and speed (see ReaderEngine.cursor).
+ */
+function LiveText({ e, i, text, open, close }: { e: ReaderEngine; i: number; text: string; open: string; close: string }) {
+  const [at, setAt] = useState<number | null>(null);
+  useEffect(() => {
+    let raf = 0;
+    let last = -2;
+    const tick = () => {
+      const c = e.cursor();
+      const pos = !c ? -1 : c.seg < i ? -1 : c.seg > i ? text.length : c.char;
+      if (pos !== last) {
+        last = pos;
+        setAt(pos < 0 ? null : pos);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [e, i, text]);
+  if (at === null) return <>{open}{text}{close}</>;
+  if (at >= text.length) return <span className="spoken">{open}{text}{close}</span>;
+  // The whole word around the cursor.
+  let a = at, b = at;
+  while (a > 0 && !/\s/.test(text[a - 1])) a--;
+  while (b < text.length && !/\s/.test(text[b])) b++;
+  return (
+    <>
+      <span className="spoken">{open}{text.slice(0, a)}</span>
+      <span className="word-now">{text.slice(a, b)}</span>
+      {text.slice(b)}{close}
+    </>
+  );
+}
+
+/** How the reading cursor behaves, and a timing nudge for the voice in use. */
+function CursorSettings({ e }: { e: ReaderEngine }) {
+  const voice = e.current?.voice || e.casting.Narrator || "";
+  const shift = e.prefs.cursorShift[voice] ?? 0;
+  return (
+    <div className="cursor-settings small">
+      <div className="row between">
+        <span><strong>Reading cursor</strong> <span className="muted">follows each word as it is read</span></span>
+        <div className="seg-toggle" role="radiogroup" aria-label="Reading cursor">
+          <button role="radio" aria-checked={e.prefs.cursor === "word"} className={e.prefs.cursor === "word" ? "on" : ""} onClick={() => e.setPrefs({ cursor: "word" })}>Word</button>
+          <button role="radio" aria-checked={e.prefs.cursor === "line"} className={e.prefs.cursor === "line" ? "on" : ""} onClick={() => e.setPrefs({ cursor: "line" })}>Line</button>
+        </div>
+      </div>
+      {e.prefs.cursor === "word" && voice && (
+        <div className="row between">
+          <span className="muted">Cursor timing for this voice{shift ? ` · ${shift > 0 ? "+" : ""}${shift.toFixed(1)} s` : ""}</span>
+          <span className="row gap-s">
+            <button className="btn small-btn" onClick={() => e.shiftCursor(voice, -0.2)} aria-label="Cursor earlier">◀ Earlier</button>
+            <button className="btn small-btn" onClick={() => e.shiftCursor(voice, 0.2)} aria-label="Cursor later">Later ▶</button>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VoiceSheet({ e, speaker, onClose }: { e: ReaderEngine; speaker: string; onClose: () => void }) {
   const isCharacter = speaker !== "Narrator";
   // In one-voice mode a change applies to the whole book unless "only this character" is picked.

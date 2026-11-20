@@ -12,6 +12,7 @@ interface Bridge {
   remove(tier: string): void;
   speak(id: string, tier: string, text: string, sid: number, speed: number): void;
   setPlaying(playing: boolean, title: string, subtitle: string): void;
+  setMedia?(playing: boolean, title: string, subtitle: string, progress: number): void;
   openExternal(url: string): void;
   scanFolder?(): void;
   installUpdate?(url: string): void;
@@ -279,9 +280,11 @@ export class NativeVoice {
     return new File([await r.blob()], f.name, { lastModified: f.modified || Date.now() });
   }
 
-  setPlaying(playing: boolean, title: string, subtitle: string) {
+  setPlaying(playing: boolean, title: string, subtitle: string, progress = -1) {
     try {
-      bridge()?.setPlaying(playing, title, subtitle);
+      const b = bridge();
+      if (b?.setMedia) b.setMedia(playing, title, subtitle, progress);
+      else b?.setPlaying(playing, title, subtitle);
     } catch {}
   }
 

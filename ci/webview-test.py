@@ -1,6 +1,6 @@
 """Drives the Voicebook page inside the Android app (WebView, via Chrome DevTools)
 and checks that the phone voice reads passage after passage."""
-import json, subprocess, sys, time, urllib.request
+import json, re, subprocess, sys, time, urllib.request
 import websocket  # pip install websocket-client
 
 out = open("out/webview.txt", "w")
@@ -79,6 +79,27 @@ if ok:
     wake = [l.strip() for l in adb("dumpsys", "power").splitlines() if "mWakefulness=" in l or "Display Power: state=" in l]
     say("screen off at passage", before["i"], "|", "; ".join(wake[:2]))
     say("notification:", "yes" if "app.voicebook" in adb("dumpsys", "notification", "--noredact") else "no")
+    # The lock-screen player: a media session that headset / lock-screen buttons control.
+    def session_state():
+        out = adb("dumpsys", "media_session")
+        blk = out[out.find("package=app.voicebook"):][:1500] if "package=app.voicebook" in out else ""
+        m = re.search(r"state=PlaybackState \{state=(\w+)", blk)
+        return m.group(1) if m else ("no session" if not blk else "?")
+    say("media session:", session_state())
+    adb("input", "keyevent", "KEYCODE_MEDIA_PAUSE")
+    time.sleep(3)
+    paused = state()
+    say("after the PAUSE button:", json.dumps(paused), "| session:", session_state(),
+        "| player still shown:", "yes" if "app.voicebook" in adb("dumpsys", "notification", "--noredact") else "no")
+    adb("input", "keyevent", "KEYCODE_MEDIA_PLAY")
+    time.sleep(4)
+    resumed = state()
+    say("after the PLAY button:", json.dumps(resumed), "| session:", session_state())
+    lockscreen_ok = (not paused["playing"]) and resumed["playing"]
+    say("lock-screen buttons", "work" if lockscreen_ok else "did NOT work")
+    if not lockscreen_ok:
+        ok = False
+    before = state()
     t1 = time.time()
     after = before
     # Watch for two minutes: long enough for the phone to throttle a page that isn't kept alive.
