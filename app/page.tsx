@@ -805,13 +805,27 @@ export default function Home() {
                 const newPart = chapterStart && !e.segments.slice(i, i + 3).some((x) => x.chunk === s.chunk && x.text.startsWith(named));
                 const heading = e.isHeading(s);
                 const active = i >= e.index && i <= e.groupEnd;
+                if (s.fx)
+                  return (
+                    <span key={s.id}>
+                      {s.para && !firstOfPart && <span className="para-break" aria-hidden />}
+                      <span
+                        ref={i === e.index ? activeRef : undefined}
+                        className={`seg fx ${active ? "active" : ""}`}
+                        onClick={() => e.jump(i)}
+                        title={s.fx === "chime" ? "Game message" : `Sound effect · ${s.fx}`}
+                      >
+                        {s.fx === "chime" ? "🔔" : `🔊 ${s.text}`}
+                      </span>{" "}
+                    </span>
+                  );
                 return (
                   <span key={s.id}>
                     {newPart && <span className="part-break" aria-hidden>{chapterStart.title}</span>}
                     {s.para && !firstOfPart && !heading && <span className="para-break" aria-hidden />}
                     <span
                       ref={i === e.index ? activeRef : undefined}
-                      className={`seg ${active ? "active" : ""} ${heading ? "heading" : ""} ${cast && s.speaker !== "Narrator" ? "dialogue" : ""}`}
+                      className={`seg ${active ? "active" : ""} ${heading ? "heading" : ""} ${cast && s.speaker !== "Narrator" ? "dialogue" : ""} ${s.speaker === "System" ? "system" : ""}`}
                       style={cast && s.speaker !== "Narrator" ? { ["--c" as string]: speakerColor(s.speaker) } : undefined}
                       onClick={() => (active && e.playing ? setVoiceSheet(s.speaker) : e.jump(i))}
                       title={cast ? `${s.speaker} · ${s.emotion}${s.delivery ? ` · ${s.delivery}` : ""}${s.sfx ? ` · 🔊 ${s.sfx}` : ""}` : undefined}

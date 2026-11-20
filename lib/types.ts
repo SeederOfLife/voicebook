@@ -88,6 +88,10 @@ export interface Segment extends RawSegment {
   chunk: number;
   /** Spoken dialogue cut into pieces: 1 = this piece opens the quotation, 2 = closes it, 3 = both */
   quote?: number;
+  /** A sound effect played instead of words (speaker "FX"): see lib/fx.ts */
+  fx?: string;
+  /** Part of a line cut around a sound effect or a system message (never a heading) */
+  cont?: boolean;
 }
 
 export interface Analysis {

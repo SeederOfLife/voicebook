@@ -111,6 +111,9 @@ textarea:focus, input:focus, select:focus { outline: 2px solid var(--accent); ou
 .seg:hover { background: #ffffff0d; }
 .seg.dialogue { color: var(--ink); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--c) 45%, transparent); }
 .seg.active { background: color-mix(in srgb, var(--accent) 22%, transparent); color: #fff; }
+.seg.fx { font-size: .78em; letter-spacing: .04em; font-weight: 600; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); border-radius: 999px; padding: 0 .55em; white-space: nowrap; }
+.seg.system { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .9em; color: #bfe3ff; background: #4aa3ff14; border: 1px solid #4aa3ff40; border-radius: 6px; padding: 1px 6px; box-shadow: none; }
+.seg.system.active { background: color-mix(in srgb, #4aa3ff 28%, transparent); color: #fff; }
 .who {
   font-family: var(--sans); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
   color: var(--c); margin-right: 6px; vertical-align: 0.15em;

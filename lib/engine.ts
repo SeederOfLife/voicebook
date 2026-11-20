@@ -10,6 +10,7 @@ import { NativeVoice } from "./native";
 import { api } from "./paths";
 import { library, type BookRecord, type VoiceTweak } from "./library";
 import { Soundscape } from "./soundscape";
+import { FX_SPEAKER, fxUrl, splitEffects, SYSTEM_SPEAKER, type FxKind } from "./fx";
 import type { Analysis, AppConfig, Chapter, Character, Emotion, Mood, Provider, RawSegment, Scene, Segment, VoiceOption } from "./types";
 import { browserProsody, browserVoiceOptions, castVoices, STUDIO_VOICES } from "./voices";
 
@@ -129,6 +130,9 @@ function hash53(str: string): string {
   h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
   return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
 }
+
+/** Lines that are not narration: sound effects and game system messages. */
+const special = (s: Segment) => !!s.fx || s.speaker === SYSTEM_SPEAKER;
 
 /** A few seconds of silence, looped while waiting so a phone keeps the audio session alive. */
 function silentWavUrl(seconds: number): string {
@@ -719,8 +723,27 @@ export class ReaderEngine {
   private recast() {
     this.seedCasting();
     this.casting = castVoices(this.characters, this.voicesFor(), this.meta.genre || "other", this.casting);
+    this.castSystemVoice();
     this.castingByProvider = { ...this.castingByProvider, [this.provider]: this.casting };
     for (const ch of this.characters) if (!(ch.name in this.accents)) this.accents[ch.name] = ch.accent ?? "";
+  }
+
+  /**
+   * Game messages ([You have suffered a deep wound. HP -122.]) get their own crisp voice,
+   * never the narrator's, chosen once and kept. Nobody else's voice changes.
+   */
+  private castSystemVoice() {
+    const voices = this.voicesFor();
+    if (!voices.length || voices.some((v) => v.id === this.casting[SYSTEM_SPEAKER])) return;
+    const narrator = this.casting.Narrator;
+    const taken = new Set(Object.entries(this.casting).filter(([k]) => k !== SYSTEM_SPEAKER).map(([, v]) => v));
+    const prefs = ["af_nova", "bf_lily", "af_sky", "am_echo", "bm_lewis"];
+    const pick =
+      prefs.map((id) => voices.find((v) => v.id === id && v.id !== narrator && !taken.has(v.id))).find(Boolean) ??
+      voices.find((v) => v.id !== narrator && !taken.has(v.id) && !v.fun) ??
+      voices.find((v) => v.id !== narrator) ??
+      voices[0];
+    this.casting = { ...this.casting, [SYSTEM_SPEAKER]: pick.id };
   }
 
   /** Read the whole book once to know its characters before the first line is spoken. */
@@ -821,19 +844,37 @@ export class ReaderEngine {
     markParagraphs(segs, this.chunks[c] ?? "");
     this.characters = [...byName.values()];
     for (const s of segs) {
-      const pieces = s.text.length <= MAX_SEGMENT ? [s.text] : splitSentences(s.text, MAX_SEGMENT);
+      // Sound words (*SNIKT*, BOOM!) become sound effects; [game messages] get a chime and
+      // the system voice. Everything else is read by the line's own speaker as before.
+      const parts = splitEffects(s.text);
+      const cut = parts.length > 1;
       const spoken = s.speaker !== "Narrator";
-      pieces.forEach((text, k) =>
-        this.segments.push({
-          ...s,
-          text,
-          para: k === 0 ? s.para : false,
-          sfx: k === 0 ? s.sfx : "",
-          quote: spoken ? (k === 0 ? 1 : 0) + (k === pieces.length - 1 ? 2 : 0) : 0,
-          id: `${c}-${this.segments.length}`,
-          chunk: c,
-        }),
-      );
+      const texts = parts.filter((x) => x.kind === "text").length;
+      let seenText = 0;
+      parts.forEach((part, n) => {
+        const base = { ...s, para: n === 0 ? s.para : false, sfx: n === 0 ? s.sfx : "", chunk: c, cont: cut || undefined };
+        if (part.kind === "fx") {
+          this.segments.push({ ...base, speaker: FX_SPEAKER, text: part.text, fx: part.fx, emotion: "neutral", quote: 0, id: `${c}-${this.segments.length}` });
+          return;
+        }
+        if (part.kind === "system") {
+          this.segments.push({ ...base, speaker: FX_SPEAKER, text: "", fx: "chime", emotion: "neutral", quote: 0, id: `${c}-${this.segments.length}` });
+          this.segments.push({ ...base, para: false, speaker: SYSTEM_SPEAKER, text: part.text, emotion: "neutral", quote: 0, id: `${c}-${this.segments.length}` });
+          return;
+        }
+        const first = seenText === 0, last = ++seenText === texts;
+        const pieces = part.text.length <= MAX_SEGMENT ? [part.text] : splitSentences(part.text, MAX_SEGMENT);
+        pieces.forEach((text, k) =>
+          this.segments.push({
+            ...base,
+            text,
+            para: k === 0 ? base.para : false,
+            sfx: k === 0 ? base.sfx : "",
+            quote: spoken ? (first && k === 0 ? 1 : 0) + (last && k === pieces.length - 1 ? 2 : 0) : 0,
+            id: `${c}-${this.segments.length}`,
+          }),
+        );
+      });
     }
     this.analyzedUpTo = c;
     this.recast();
@@ -856,7 +897,7 @@ export class ReaderEngine {
 
   /** A title or chapter heading: read on its own, with a pause after it. */
   isHeading(s: Segment) {
-    if (s.speaker !== "Narrator") return false;
+    if (s.speaker !== "Narrator" || s.cont) return false;
     return /heading/i.test(s.delivery ?? "") || (s.text.length < 80 && !/[.!?…"”»,;:]$/.test(s.text.trim()));
   }
 
@@ -864,13 +905,13 @@ export class ReaderEngine {
   private runFrom(s: number, limit: number): number {
     const segs = this.segments;
     const first = segs[s];
-    if (this.isHeading(first)) return s;
+    if (this.isHeading(first) || first.fx) return s;
     let len = first.text.length;
     let j = s;
     for (;;) {
       const n = segs[j + 1];
       if (!n || n.chunk !== first.chunk || this.isHeading(n)) break;
-      if (!this.oneVoice && n.speaker !== first.speaker) break;
+      if (n.fx || ((!this.oneVoice || special(n) || special(first)) && n.speaker !== first.speaker)) break;
       if (len + 1 + n.text.length > limit) break;
       if (n.para && len >= limit * 0.5) break; // a paragraph end is the best place to breathe
       len += 1 + n.text.length;
@@ -901,6 +942,8 @@ export class ReaderEngine {
   }
 
   private pauseAfter(last: Segment, next?: Segment): number {
+    if (last.fx) return 0; // the effect carries its own short pause
+    if (next?.fx) return next.fx === "chime" ? 380 : 220;
     if (this.isHeading(last)) return 750;
     if (!next || next.chunk !== last.chunk || this.isHeading(next)) return 800;
     let ms = next.para ? 600 : 320;
@@ -925,8 +968,9 @@ export class ReaderEngine {
     if (!this.segments[i]) return null;
     const [start, end] = this.bounds(i);
     const first = this.segments[start];
-    const speaker = this.oneVoice ? "Narrator" : first.speaker;
-    const voice = this.casting[speaker] ?? this.casting.Narrator ?? "";
+    const speaker = this.oneVoice && !special(first) ? "Narrator" : first.speaker;
+    const voice = first.fx ? "" : this.casting[speaker] ?? this.casting.Narrator ?? "";
+    if (first.fx) return { start, end, speaker, voice, text: first.text, tailMs: 0, seg: first, key: `fx|${first.fx}|${first.text}` };
     const whole = PASSAGE_CHARS[this.provider] > 0;
     let text = "";
     for (let k = start; k <= end; k++) {
@@ -950,6 +994,10 @@ export class ReaderEngine {
   // ---------- getting a passage spoken ----------
 
   private audioFor(p: Passage, lookAhead = false): Promise<string> {
+    if (p.seg.fx) {
+      this.ready.add(p.key);
+      return Promise.resolve(fxUrl(p.seg.fx as FxKind, p.text));
+    }
     let job = this.cache.get(p.key);
     if (job) return job;
     const provider = this.provider;
@@ -1114,7 +1162,7 @@ export class ReaderEngine {
       const q = this.passageAt(from);
       if (!q) return; // the rest of the book isn't read yet: prepareAhead runs again when it is
       this.audioFor(q, true).then(
-        () => step(q.end + 1, left - 1),
+        () => step(q.end + 1, left - (q.seg.fx ? 0 : 1)), // effects are instant: they don't use up the look-ahead
         () => {},
       );
     };
@@ -1587,6 +1635,17 @@ export class ReaderEngine {
     }
     if (this.sfxOn) {
       for (const s of this.segments.slice(p.end + 1, p.end + 6)) if (s.sfx) this.sfxFor(s.sfx).catch(() => {});
+    }
+
+    if (p.seg.fx) {
+      // A sound effect: made in the app, played at once on the player, whatever the voice.
+      this.prepareAhead(p);
+      try {
+        await this.startAudio(fxUrl(p.seg.fx as FxKind, p.text), p, t, this.provider === "browser" ? "builtin" : this.provider);
+      } catch {
+        if (t === this.token) this.advance(); // a sound that can't play is simply skipped
+      }
+      return;
     }
 
     if (this.provider === "browser") {
