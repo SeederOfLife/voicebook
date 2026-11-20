@@ -13,10 +13,18 @@ apt-get update
 apt-get install -y docker.io git curl iptables-persistent
 systemctl enable --now docker
 
-# Oracle's Ubuntu images block web ports in the machine's own firewall: open 80 and 443.
-iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT || iptables -I INPUT 1 -p tcp --dport 80 -j ACCEPT
-iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT || iptables -I INPUT 1 -p tcp --dport 443 -j ACCEPT
-netfilter-persistent save || true
+# Oracle's Ubuntu images block web ports in the machine's own firewall (a REJECT rule that
+# can live in the legacy and/or the nft tables): open 80 and 443 at the top of both, and in
+# the saved rules so it survives reboots.
+for ipt in iptables iptables-legacy iptables-nft; do
+  command -v $ipt >/dev/null || continue
+  for port in 443 80; do
+    $ipt -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null || $ipt -I INPUT 1 -p tcp --dport $port -j ACCEPT || true
+  done
+done
+if [ -f /etc/iptables/rules.v4 ] && ! grep -q -- "--dport 443 -j ACCEPT" /etc/iptables/rules.v4; then
+  sed -i '0,/^-A INPUT/s//-A INPUT -p tcp -m tcp --dport 80 -j ACCEPT\n-A INPUT -p tcp -m tcp --dport 443 -j ACCEPT\n-A INPUT/' /etc/iptables/rules.v4
+fi
 
 # Optional settings (e.g. GEMINI_API_KEY=..., APP_PASSWORD=...), one per line.
 touch /etc/voicebook.env
@@ -28,6 +36,10 @@ cat > /usr/local/bin/voicebook-update <<'SCRIPT'
 #!/bin/bash
 # Rebuilds and restarts the voice server when GitHub has newer code (or on first run).
 set -e
+for ipt in iptables iptables-legacy iptables-nft; do
+  command -v $ipt >/dev/null || continue
+  for port in 443 80; do $ipt -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null || $ipt -I INPUT 1 -p tcp --dport $port -j ACCEPT || true; done
+done
 cd /opt/voicebook
 git fetch -q --depth 1 origin main
 if [ "$1" != "--force" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && docker ps -q -f name=^voicebook$ | grep -q .; then exit 0; fi
