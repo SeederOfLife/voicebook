@@ -1095,20 +1095,26 @@ export class ReaderEngine {
 
   private async studioRequest(p: Passage): Promise<Blob> {
     const down = this.studioDown;
-    if (down && (down.kind === "limit" ? this.studioUsedUp : Date.now() - down.since < RETRY_MS)) throw new VoiceError(down.kind, down.why);
+    if (down && (down.kind === "limit" ? this.studioUsedUp : Date.now() - down.since < (down.kind === "offline" ? 40_000 : RETRY_MS))) throw new VoiceError(down.kind, down.why);
     try {
       if (this.studioUsedUp) throw new VoiceError("limit", "this month's free studio-voice allowance is used up");
-      let r: Response;
-      try {
-        r = await fetch(api("/api/voice"), {
-          method: "POST",
-          headers: this.headers(),
-          body: JSON.stringify({ text: p.text, voice: p.voice || "af_heart", tailMs: p.tailMs }),
-          signal: timeoutSignal(295_000),
-        });
-      } catch {
-        throw new VoiceError("offline", "the server can't be reached");
+      let r: Response | null = null;
+      // A server restarting (an update) or a moment without signal: try again before giving up.
+      for (const wait of [0, 4000, 12000]) {
+        if (wait) await new Promise((ok) => setTimeout(ok, wait));
+        try {
+          r = await fetch(api("/api/voice"), {
+            method: "POST",
+            headers: this.headers(),
+            body: JSON.stringify({ text: p.text, voice: p.voice || "af_heart", tailMs: p.tailMs }),
+            signal: timeoutSignal(295_000),
+          });
+          if (r.status < 502 || r.status > 504) break;
+        } catch {
+          r = null;
+        }
       }
+      if (!r) throw new VoiceError("offline", "the server can't be reached");
       if (!r.ok || !(r.headers.get("content-type") ?? "").startsWith("audio/")) {
         const info = await r.json().catch(() => null);
         const reason = typeof info?.error === "string" ? info.error : `the server answered with error ${r.status}`;
@@ -1133,7 +1139,7 @@ export class ReaderEngine {
       this.notice =
         err.kind === "limit"
           ? `This month's free studio-voice allowance is used up on this device. Passages already saved still play in the studio voice; for new ones ${standIn} until next month.`
-          : `The studio voice isn't available right now (${err.message}). Saved passages still play; for new ones ${standIn}. It will be tried again in a couple of minutes.`;
+          : `The studio voice isn't available right now (${err.message}). Saved passages still play; for new ones ${standIn}. It will be tried again in ${err.kind === "offline" ? "less than a minute" : "a couple of minutes"}.`;
       throw err;
     }
   }

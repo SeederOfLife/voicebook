@@ -10,12 +10,13 @@ COPY package.json package-lock.json ./
 COPY scripts ./scripts
 RUN ONNXRUNTIME_NODE_INSTALL_CUDA=skip npm ci --no-audit --no-fund
 
-COPY . .
-RUN npx next build
-
-# The voice model (326 MB), inside the image so the server starts ready.
+# The voice model (326 MB), inside the image so the server starts ready. Before the code
+# is copied, so updates to the code reuse it instead of downloading it again.
 RUN mkdir -p models && curl -fsSL -o models/kokoro-v1.0.onnx \
     https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+
+COPY . .
+RUN npx next build
 
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 \
     KOKORO_MODEL=fp32 KOKORO_MODEL_PATH=/app/models/kokoro-v1.0.onnx \

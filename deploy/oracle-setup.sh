@@ -32,22 +32,11 @@ chmod 600 /etc/voicebook.env
 
 [ -d /opt/voicebook ] || git clone --depth 1 https://github.com/SeederOfLife/voicebook.git /opt/voicebook
 
+# The hourly updater: pulls this repository, then runs its deploy/voicebook-update.sh (so
+# improvements to the updater reach this machine by themselves).
 cat > /usr/local/bin/voicebook-update <<'SCRIPT'
 #!/bin/bash
-# Rebuilds and restarts the voice server when GitHub has newer code (or on first run).
-set -e
-for ipt in iptables iptables-legacy iptables-nft; do
-  command -v $ipt >/dev/null || continue
-  for port in 443 80; do $ipt -C INPUT -p tcp --dport $port -j ACCEPT 2>/dev/null || $ipt -I INPUT 1 -p tcp --dport $port -j ACCEPT || true; done
-done
-cd /opt/voicebook
-git fetch -q --depth 1 origin main
-if [ "$1" != "--force" ] && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] && docker ps -q -f name=^voicebook$ | grep -q .; then exit 0; fi
-git reset -q --hard origin/main
-docker build -t voicebook . 
-docker rm -f voicebook 2>/dev/null || true
-docker run -d --name voicebook --restart unless-stopped -p 127.0.0.1:8080:8080 -e PORT=8080 --env-file /etc/voicebook.env voicebook
-docker image prune -f >/dev/null
+cd /opt/voicebook && git fetch -q --depth 100 origin main && git reset -q --hard origin/main && exec bash /opt/voicebook/deploy/voicebook-update.sh "$@"
 SCRIPT
 chmod +x /usr/local/bin/voicebook-update
 /usr/local/bin/voicebook-update --force
