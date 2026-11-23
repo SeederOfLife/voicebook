@@ -1,6 +1,10 @@
 # 🎧 Voicebook — AI audiobook reader
 
-**Live:** https://voicebook-lake.vercel.app
+**Open the app:** https://seederoflife.github.io/voicebook/
+**Android app:** [voicebook.apk](https://seederoflife.github.io/voicebook/download/voicebook.apk) (or [for older 32-bit phones](https://seederoflife.github.io/voicebook/download/voicebook-older-phones.apk))
+
+The website is published by GitHub Pages; the studio voice and AI casting run on our own
+server on Oracle Cloud's free tier (see *Hosting* below). Vercel is no longer used.
 
 Upload a **PDF, EPUB, TXT, Markdown or HTML** and listen to it like a real audiobook:
 
@@ -20,7 +24,10 @@ Upload a **PDF, EPUB, TXT, Markdown or HTML** and listen to it like a real audio
 2. Upload the project files: on the repo page click **"uploading an existing file"**, drag in everything from this folder **except `node_modules` and `.next`**, then commit.
    Or from a computer: `git init && git add . && git commit -m "Voicebook" && git branch -M main && git remote add origin https://github.com/YOU/voicebook.git && git push -u origin main`
 
-## 2. Deploy on Vercel
+## 2. Deploy on Vercel (old setup, no longer used)
+
+> Voicebook moved to GitHub Pages + an Oracle Cloud server in November 2026 (see *Hosting* below). These steps are kept for reference.
+
 
 1. Go to [vercel.com/new](https://vercel.com/new) and import the GitHub repo. Leave the defaults (Next.js is detected automatically).
 2. Before clicking **Deploy**, add **Environment Variables** (see below).
@@ -144,15 +151,16 @@ Voices are downloaded from Hugging Face once and kept in the browser's storage (
 ## Android app (APK)
 
 `android/` is a small native Android app around the web app (a full-screen WebView on
-`voicebook-lake.vercel.app`, so it updates with every deploy) that adds:
+`seederoflife.github.io/voicebook`, so it updates with every deploy) that adds:
 
 - **Phone AI voice**: the studio voice (Kokoro v1.0) running natively through
   [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) on up to 4 processor cores.
   Two sizes, downloaded once inside the app: *Fast* (8-bit, 132 MB) and *Best*
   (full precision, 350 MB, suggested on phones with 6 GB+ memory). Works offline,
   no monthly limit.
-- **Reading with the screen off**: a foreground service with a pause/play
-  notification and a wake lock.
+- **Reading with the screen off**: a foreground service and a wake lock.
+- **Lock-screen player**: a media session with previous / play-pause / next on the lock
+  screen, in the notification and quick settings, and from headset or Bluetooth buttons.
 - File picker for books; the back button keeps reading in the background.
 
 Every push to `android/` (or the workflow) runs `.github/workflows/android.yml`:
@@ -181,9 +189,18 @@ Voices are remembered per series (same author, or the same folder when the
 author is unknown): a character keeps the same voice in every book, and a voice
 chosen by hand is never replaced by the automatic casting.
 
-## Hosting: GitHub Pages + Hugging Face (Vercel optional)
+## Hosting: GitHub Pages + Oracle Cloud
 
-The app can run without Vercel:
+- **Website**: GitHub Pages, https://seederoflife.github.io/voicebook/
+- **Voice + AI server**: an Oracle Cloud *Always Free* Arm machine (2 cores, 12 GB) at
+  `https://152-70-26-196.sslip.io`, set up by `deploy/oracle-setup.sh` (Docker + Caddy for
+  HTTPS). It updates itself hourly from this repository (`deploy/voicebook-update.sh`),
+  rebuilding only when server code changes, on one core, while the voice keeps running.
+  - Rebuild from scratch: in Oracle Cloud Shell run `deploy/oracle-rebuild.sh`.
+  - Zero-cost guard (free size, quota, first-cent budget alert): `deploy/oracle-safety.sh`.
+  - Health report / updater upgrade: `deploy/server-fix.sh`.
+
+Older notes on the other hosting options follow.
 
 - **Website**: `.github/workflows/pages.yml` builds a static copy (`STATIC_EXPORT=1`,
   under `/voicebook/`) and publishes it to **https://seederoflife.github.io/voicebook/**.
@@ -192,8 +209,8 @@ The app can run without Vercel:
   `huggingface/Dockerfile`, which clones this repository and bakes in the full voice
   model. `.github/workflows/hf-space.yml` keeps the Space on the newest code
   (needs the repository secret `HF_TOKEN`).
-- The site tries the servers in `NEXT_PUBLIC_API_BASES` in order (default: the Space,
-  then Vercel) and remembers the first that answers; a sleeping Space is waited for.
+- The site tries the servers in `NEXT_PUBLIC_API_BASES` in order (default: the Oracle
+  server) and remembers the first that answers.
   Change the list with the repository variable `VOICE_SERVERS`.
 - Servers accept calls from `CORS_ORIGIN` (default `https://seederoflife.github.io`).
 - The Android app opens the Pages address and falls back to Vercel (or the reverse)
